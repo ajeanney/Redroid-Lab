@@ -10,6 +10,7 @@
 data
 .runtime
 .cache
+captures
 tests
 
 # Local configuration and generated artifacts are not image inputs

@@ -1,6 +1,6 @@
 # Redroid-Lab
 
-A toolbox for running and investigating a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host: persistent data, Intel GPU acceleration, loopback-only ADB and scrcpy, ARM64 application translation, and working access to a real physical Bluetooth controller.
+A toolbox for running and investigating a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host: persistent data, GPU acceleration, loopback-only ADB and scrcpy, ARM64 application translation, network packet capture, and (optionally) working access to a real physical Bluetooth controller.
 
 The project started as a Bluetooth-passthrough image and is growing into a
 general lab for poking at Android apps: packet capture, root-level app
@@ -13,7 +13,8 @@ inspection, and similar reverse-engineering workflows.
 | Pinned redroid 14 image with persistent data, Intel GPU, scrcpy | Available |
 | ARM64 application translation (`libndk_translation`) | Available |
 | Physical Bluetooth passthrough (AOSP Linux-HCI HAL) | Available |
-| Network packet capture from the container | Planned |
+| Optional Bluetooth: run without it via `start --no-bt` | Available |
+| Network packet capture (pcap + decoded HTTPS) and APK install | Available |
 | Root-based app investigation tooling | Planned |
 
 "Planned" rows are goals; none is implemented yet.
@@ -21,6 +22,10 @@ inspection, and similar reverse-engineering workflows.
 Contributors and AI coding agents: see [AGENTS.md](AGENTS.md).
 
 ## Physical Bluetooth
+
+Bluetooth passthrough is optional: `./redroid.sh start --no-bt` (or
+`BT_ENABLE=0` in the configuration) boots Android without touching BlueZ or the
+adapter, so the container can be used for everything else, such as packet capture.
 
 Physical Bluetooth is not supported by stock redroid: the upstream image uses
 a simulated controller. Redroid-Lab replaces that simulation with AOSP's
@@ -42,6 +47,7 @@ Upstream references:
 | Ubuntu 22.04 LTS | Clean installation of the complete host dependency set; Bash 5.1 syntax and command-path audit | Compatible; hardware run still required |
 | Ubuntu 24.04 LTS | Clean installation of the complete host dependency set; Bash 5.2 syntax and command-path audit | Compatible; hardware run still required |
 | Debian | Package mapping and Binder guidance are implemented | Best effort; not hardware-tested |
+| Arch Linux x86_64, AMD Lucienne GPU, Realtek `0bda:2852` Bluetooth | Build, `start --no-bt` boot on the host GPU, ARM64 bridge properties, split-APK install, packet capture with decoded HTTPS from a real app | Verified without Bluetooth; passthrough not tested on this adapter |
 
 The Ubuntu checks confirm that the setup's dependencies and shell interfaces
 are available on both LTS releases. They cannot substitute for an end-to-end
@@ -56,6 +62,9 @@ Android framework and netd ── Docker bridge ── host networking
               └─ btlinux HAL ── host network namespace ── HCI_CHANNEL_USER ── hci0
 
 ADB/scrcpy ── 127.0.0.1:5555 only
+
+capture: tcpdump (container netns) ── full.pcap
+         mitmproxy (Docker gateway) ◄── Android global proxy ── flows.mitm
 ```
 
 Android stays in Docker's network namespace, preventing `netd` from modifying
@@ -68,8 +77,9 @@ same time.
 
 - x86_64 Linux with systemd and Docker
 - Binder IPC and BinderFS in the running kernel
-- Intel DRM render node at `/dev/dri/renderD128`
-- a Bluetooth controller exposed as `hci0` and driven by `btusb`
+- DRM render node at `/dev/dri/renderD128` (Intel is the reference; `setup` only warns on other vendors, and an AMD GPU boots in host mode; if yours does not, set `REDROID_GPU_MODE=guest` in a local config)
+- for Bluetooth passthrough only: a controller exposed as `hci0` and driven by `btusb`
+- for capture: `tcpdump`, `mitmproxy`, Wireshark's `editcap` and `nsenter`; `setup` installs them on Arch, Debian and Ubuntu, and `capture start` needs `sudo` for tcpdump
 - approximately 10 GB of free space for images, build inputs, and cache
 - outbound HTTPS access during the initial build
 
@@ -124,7 +134,13 @@ user.
 ./redroid.sh screen
 ```
 
-Stop Android and return the Bluetooth adapter to Linux with:
+Without Bluetooth (leaves BlueZ and the adapter alone):
+
+```sh
+./redroid.sh start --no-bt
+```
+
+Stop Android (and any running capture) and return the Bluetooth adapter to Linux with:
 
 ```sh
 ./redroid.sh stop
@@ -140,11 +156,14 @@ and restores the host's previous BlueZ and adapter power state.
 | Command | Purpose |
 | --- | --- |
 | `./redroid.sh setup` | Install missing dependencies, build the pinned overlay image, and optionally build the ARM64 smoke APK |
-| `./redroid.sh start` | Reserve `hci0`, boot Android, and validate networking, Bluetooth, and ARM64 translation |
-| `./redroid.sh stop` | Remove Android and restore the previous BlueZ and adapter state |
+| `./redroid.sh start [--no-bt]` | Reserve `hci0` (unless `--no-bt`), boot Android, and validate networking, Bluetooth, and ARM64 translation |
+| `./redroid.sh stop` | End any capture, remove Android, and restore the previous BlueZ and adapter state |
 | `./redroid.sh screen` | Open scrcpy; use AAC on modern releases and video/input-only mode on older Ubuntu packages |
 | `./redroid.sh status` | Show container, Android, ABI, BlueZ, and btlinux readiness |
 | `./redroid.sh logs` | Print Bluetooth diagnostics and save HCI snoop data when available |
+| `./redroid.sh install <apk\|dir>...` | Install one APK, several split APKs, or a directory of splits (`base.apk` + `split_config.*.apk`) |
+| `./redroid.sh capture start [--no-mitm]` | Record all container traffic to `captures/<UTC timestamp>/` |
+| `./redroid.sh capture stop` / `status` | End the session and write the artifacts / show the active session |
 
 Lifecycle operations use a lock and a private state file. Repeated `stop` calls
 are safe, and interrupted startup is recovered on the next lifecycle command.
@@ -155,7 +174,8 @@ Defaults are in `redroid.env`:
 
 - pinned base and local image names
 - container name and loopback ADB port
-- Bluetooth adapter and expected USB ID
+- Bluetooth adapter, expected USB ID, and `BT_ENABLE` (default `1`)
+- capture directory (`CAPTURE_DIR`) and preferred mitmproxy port (`MITM_PORT`)
 - persistent data directory
 - display resolution, density, and frame rate
 - GPU and native-bridge settings
@@ -172,13 +192,41 @@ REDROID_CONFIG=./redroid.local.env ./redroid.sh start
 
 Use the same configuration for every lifecycle command.
 
-Android data persists under `data/`. Install applications directly with:
+Android data persists under `data/`. Install applications with
+`./redroid.sh install /path/to/application.apk` (or a directory of split APKs).
+No Google services or Play Store are included.
+
+## Packet capture
 
 ```sh
-adb -s 127.0.0.1:5555 install -r /path/to/application.apk
+./redroid.sh start --no-bt
+./redroid.sh install ./some-app-splits/
+./redroid.sh capture start       # --no-mitm for raw packets only
+# ... drive the app with ./redroid.sh screen ...
+./redroid.sh capture stop
 ```
 
-No Google services or Play Store are included.
+Each session is written to `captures/<UTC timestamp>/` (ignored by Git):
+
+| File | Content |
+| --- | --- |
+| `full.pcap` | Every packet in the container's network namespace (HTTPS, UDP/P2P, STUN/TURN, MQTT, DNS), captured by `tcpdump` entered with `nsenter` |
+| `flows.mitm` | Decoded HTTP(S) flows; read with `mitmweb --rfile` |
+| `sslkeylog.txt` | TLS session keys from mitmproxy |
+| `full-decrypted.pcapng` | `full.pcap` with the keys injected, so Wireshark decrypts the proxied HTTPS |
+
+How it works: mitmproxy listens on the container's Docker gateway address (it
+tries the next port if `MITM_PORT` is busy), the mitmproxy CA is copied into
+Android's system and conscrypt trust stores, and Android's global `http_proxy` is
+pointed at the proxy. Only traffic from proxy-aware apps is decoded; everything
+else, including non-HTTP protocols, is still in the pcap in raw form. Apps that
+pin certificates or ignore the system proxy will show up only in the pcap. The
+CA is copied again at each `capture start`, and the proxy setting is cleared at
+`capture stop` (also done by `stop`).
+
+`tcpdump` runs as root through `sudo` and then drops privileges to the invoking
+user, so artifacts are user-owned. Captures contain decrypted credentials and
+personal data: keep `captures/` private.
 
 ## ARM application support
 
@@ -216,8 +264,10 @@ for controllers that do not recover cleanly.
 
 ## Security model
 
-The container is privileged and the Bluetooth HAL receives access to the host
-network namespace. Treat the image and installed Android applications as
+The container is privileged and, when Bluetooth is enabled, the Bluetooth HAL
+receives access to the host network namespace (without it, the HAL has no
+namespace to enter and exits).
+During a capture, the mitmproxy CA is trusted by the Android guest only. Treat the image and installed Android applications as
 trusted code.
 
 ADB is published only on `127.0.0.1`; `ADB_HOST` is rejected if changed to a

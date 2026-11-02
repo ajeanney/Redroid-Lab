@@ -1,6 +1,9 @@
 # Persistent Android state (contains apps, credentials, bonds, and user data)
 /data/
 
+# Packet capture sessions (pcaps, decoded flows, TLS keys)
+/captures/
+
 # Lifecycle state, generated smoke APK, HCI snoops, and diagnostics
 /.runtime/
 

@@ -30,13 +30,17 @@ load_config() {
     for name in BASE_IMAGE LOCAL_IMAGE CONTAINER_NAME ADB_HOST ADB_PORT \
         BT_ADAPTER NFT_TABLE REDROID_DATA_DIR REDROID_WIDTH REDROID_HEIGHT \
         REDROID_DPI REDROID_FPS REDROID_GPU_MODE REDROID_NATIVE_BRIDGE \
-        HOST_NETNS_SOURCE BOOT_TIMEOUT; do
+        HOST_NETNS_SOURCE BOOT_TIMEOUT BT_ENABLE CAPTURE_DIR MITM_PORT; do
         [[ -n ${!name:-} ]] || die "missing configuration value '$name'"
     done
     if [[ ! $ADB_PORT =~ ^[0-9]+$ ]] || (( ADB_PORT < 1 || ADB_PORT > 65535 )); then
         die "ADB_PORT must be between 1 and 65535"
     fi
     [[ $ADB_HOST == 127.0.0.1 ]] || die "ADB_HOST must be 127.0.0.1"
+    [[ $BT_ENABLE == [01] ]] || die "BT_ENABLE must be 0 or 1"
+    if [[ ! $MITM_PORT =~ ^[0-9]+$ ]] || (( MITM_PORT < 1 || MITM_PORT > 65535 )); then
+        die "MITM_PORT must be between 1 and 65535"
+    fi
     [[ $HOST_NETNS_SOURCE == /* ]] || die "HOST_NETNS_SOURCE must be an absolute path"
     [[ $NFT_TABLE =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || \
         die "NFT_TABLE contains invalid characters"
@@ -45,6 +49,7 @@ load_config() {
     if [[ $configured_data != /* ]]; then
         REDROID_DATA_DIR=$SCRIPT_DIR/$configured_data
     fi
+    [[ $CAPTURE_DIR == /* ]] || CAPTURE_DIR=$SCRIPT_DIR/${CAPTURE_DIR#./}
     ADB_SERIAL=$ADB_HOST:$ADB_PORT
 }
 
@@ -54,6 +59,12 @@ container_exists() {
 
 container_running() {
     [[ $(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || true) == true ]]
+}
+
+# A first `adb` call forks the adb server, which would otherwise inherit the
+# lifecycle lock (fd 9) and hold it after this script exits.
+adb() {
+    command adb "$@" 9>&-
 }
 
 adb_shell() {
@@ -68,9 +79,22 @@ acquire_lock() {
 
 require_runtime_tools() {
     local tool
-    for tool in docker adb nft flock systemctl sudo btmgmt rfkill ip ss sha256sum modprobe; do
+    for tool in docker adb nft flock sudo ip ss sha256sum modprobe; do
         need "$tool"
     done
+}
+
+require_bt_tools() {
+    local tool
+    for tool in systemctl btmgmt rfkill; do
+        need "$tool"
+    done
+}
+
+# True when the lifecycle state on disk says this run took over Bluetooth.
+# States written before BT_MANAGED existed always did.
+bt_managed_in_state() {
+    [[ -r $STATE_FILE ]] && ! grep -q '^BT_MANAGED=0$' "$STATE_FILE"
 }
 
 host_family() {
@@ -141,10 +165,10 @@ preflight() {
     docker image inspect "$LOCAL_IMAGE" >/dev/null 2>&1 || \
         die "image '$LOCAL_IMAGE' is missing; run './redroid.sh setup'"
     ensure_binder
-    validate_adapter_identity
+    [[ $BT_ENABLE == 0 ]] || validate_adapter_identity
     [[ -e /dev/dri/renderD128 ]] || \
         die "Intel render node /dev/dri/renderD128 is unavailable"
-    [[ -e $HOST_NETNS_SOURCE ]] || \
+    [[ $BT_ENABLE == 0 || -e $HOST_NETNS_SOURCE ]] || \
         die "host network namespace is unavailable at '$HOST_NETNS_SOURCE'"
     if ss -H -ltn "sport = :$ADB_PORT" | grep -q .; then
         die "TCP port $ADB_PORT is already in use"
@@ -166,6 +190,10 @@ install_host_dependencies() {
             command -v rfkill >/dev/null 2>&1 || missing+=(util-linux)
             command -v sha256sum >/dev/null 2>&1 || missing+=(coreutils)
             command -v modprobe >/dev/null 2>&1 || missing+=(kmod)
+            command -v tcpdump >/dev/null 2>&1 || missing+=(tcpdump)
+            command -v mitmdump >/dev/null 2>&1 || missing+=(mitmproxy)
+            command -v editcap >/dev/null 2>&1 || missing+=(wireshark-cli)
+            command -v nsenter >/dev/null 2>&1 || missing+=(util-linux)
             ;;
         debian|ubuntu)
             command -v docker >/dev/null 2>&1 || missing+=(docker.io)
@@ -179,9 +207,13 @@ install_host_dependencies() {
             command -v rfkill >/dev/null 2>&1 || missing+=(rfkill)
             command -v sha256sum >/dev/null 2>&1 || missing+=(coreutils)
             command -v modprobe >/dev/null 2>&1 || missing+=(kmod)
+            command -v tcpdump >/dev/null 2>&1 || missing+=(tcpdump)
+            command -v mitmdump >/dev/null 2>&1 || missing+=(mitmproxy)
+            command -v editcap >/dev/null 2>&1 || missing+=(wireshark-common)
+            command -v nsenter >/dev/null 2>&1 || missing+=(util-linux)
             ;;
         *)
-            die "unsupported distribution; install Docker, ADB, scrcpy, nftables, BlueZ tools, iproute2, util-linux, rfkill, and kmod manually"
+            die "unsupported distribution; install Docker, ADB, scrcpy, nftables, BlueZ tools, iproute2, util-linux, rfkill, kmod, tcpdump, mitmproxy, and Wireshark's editcap manually"
             ;;
     esac
     if (( ${#missing[@]} )); then
@@ -205,12 +237,12 @@ install_host_dependencies() {
 validate_host_capabilities() {
     docker info >/dev/null 2>&1 || die "Docker daemon is unavailable (enable docker.service and ensure this user can access it)"
     ensure_binder
-    validate_adapter_identity
+    [[ $BT_ENABLE == 0 ]] || validate_adapter_identity
     [[ -e /dev/dri/renderD128 ]] || \
         die "render node /dev/dri/renderD128 is unavailable"
     if [[ -r /sys/class/drm/renderD128/device/vendor ]] && \
        [[ $(< /sys/class/drm/renderD128/device/vendor) != 0x8086 ]]; then
-        die "/dev/dri/renderD128 is not an Intel GPU"
+        note "warning: /dev/dri/renderD128 is not an Intel GPU; if Android fails to boot, set REDROID_GPU_MODE=guest in a local config"
     fi
 }
 
@@ -255,7 +287,7 @@ cmd_setup() {
     require_runtime_tools
     need scrcpy
     validate_host_capabilities
-    build_arm64_smoke_apk
+    build_arm64_smoke_apk || note "ARM64 smoke APK build failed; the smoke test will be skipped at startup"
     build_image
     note "Validating image metadata"
     docker image inspect "$LOCAL_IMAGE" --format 'image={{.Id}} size={{.Size}} bytes'
@@ -267,6 +299,7 @@ write_state() {
     local address_hash=$5 route_hash=$6 policy_hash=$7 firewall_hash=$8
     umask 077
     {
+        printf 'BT_MANAGED=%q\n' "$BT_ENABLE"
         printf 'BLUEZ_WAS_ACTIVE=%q\n' "$bluez_active"
         printf 'BLUEZ_WAS_MASKED=%q\n' "$bluez_masked"
         printf 'BT_WAS_POWERED=%q\n' "$bt_powered"
@@ -304,7 +337,7 @@ network_hash() {
             ;;
         firewall)
             sudo nft -j list ruleset \
-                | sed -E 's/"packets":[0-9]+/"packets":0/g; s/"bytes":[0-9]+/"bytes":0/g' \
+                | sed -E 's/"packets": ?[0-9]+/"packets":0/g; s/"bytes": ?[0-9]+/"bytes":0/g' \
                 | sha256sum | awk '{print $1}'
             ;;
     esac
@@ -382,7 +415,7 @@ reset_bluetooth_adapter() {
 restore_host_state() {
     local bluez_was_active=0 bluez_was_masked=0 bt_was_powered=0
     local modprobe_value='' have_state=0 address_hash='' route_hash=''
-    local policy_hash='' firewall_before_hash=''
+    local policy_hash='' firewall_before_hash='' bt_managed=1
     RESTORE_HOST_OK=1
     RESTORED_BT_SHOULD_BE_POWERED=0
     if [[ -r $STATE_FILE ]]; then
@@ -391,6 +424,7 @@ restore_host_state() {
         # These uppercase variables are written by write_state.
         # shellcheck disable=SC2153
         bluez_was_active=$BLUEZ_WAS_ACTIVE
+        bt_managed=${BT_MANAGED:-1}
         bluez_was_masked=${BLUEZ_WAS_MASKED:-0}
         bt_was_powered=${BT_WAS_POWERED:-1}
         # shellcheck disable=SC2153
@@ -407,20 +441,22 @@ restore_host_state() {
         sudo sysctl -q -w "kernel.modprobe=$modprobe_value" || true
     fi
     if [[ $have_state == 1 ]]; then
-        sudo rfkill unblock bluetooth || true
-        if [[ $bt_was_powered == 1 ]]; then
-            RESTORED_BT_SHOULD_BE_POWERED=1
-            if ! power_adapter_on && ! reset_bluetooth_adapter; then
-                echo "warning: host Bluetooth adapter could not be powered back on" >&2
-                RESTORE_HOST_OK=0
+        if [[ $bt_managed == 1 ]]; then
+            sudo rfkill unblock bluetooth || true
+            if [[ $bt_was_powered == 1 ]]; then
+                RESTORED_BT_SHOULD_BE_POWERED=1
+                if ! power_adapter_on && ! reset_bluetooth_adapter; then
+                    echo "warning: host Bluetooth adapter could not be powered back on" >&2
+                    RESTORE_HOST_OK=0
+                fi
             fi
-        fi
-        if [[ $bluez_was_masked == 0 ]]; then
-            sudo systemctl unmask --runtime bluetooth.service dbus-org.bluez.service \
-                >/dev/null 2>&1 || true
-        fi
-        if [[ $bluez_was_active == 1 ]]; then
-            sudo systemctl start bluetooth.service || true
+            if [[ $bluez_was_masked == 0 ]]; then
+                sudo systemctl unmask --runtime bluetooth.service dbus-org.bluez.service \
+                    >/dev/null 2>&1 || true
+            fi
+            if [[ $bluez_was_active == 1 ]]; then
+                sudo systemctl start bluetooth.service || true
+            fi
         fi
         if [[ -n $address_hash && $(network_hash address) != "$address_hash" ]]; then
             echo "warning: host interface addresses differ from their pre-start state" >&2
@@ -454,7 +490,7 @@ rollback_start() {
     local exit_code=$?
     trap - EXIT INT TERM
     (( exit_code != 0 )) || return 0
-    echo "startup failed; restoring host Bluetooth" >&2
+    echo "startup failed; restoring host state" >&2
     stop_container
     restore_host_state
     exit "$exit_code"
@@ -566,8 +602,14 @@ verify_network_unchanged() {
 }
 
 cmd_start() {
+    case ${1:-} in
+        '') ;;
+        --no-bt) BT_ENABLE=0 ;;
+        *) die "usage: $0 start [--no-bt]" ;;
+    esac
     acquire_lock
     require_runtime_tools
+    [[ $BT_ENABLE == 0 ]] || require_bt_tools
     if container_running; then
         [[ -r $STATE_FILE ]] || die "running container '$CONTAINER_NAME' has no lifecycle state; stop it before continuing"
         [[ $(docker inspect -f '{{(index (index .NetworkSettings.Ports "5555/tcp") 0).HostIp}}' \
@@ -578,6 +620,7 @@ cmd_start() {
     fi
     if container_exists || [[ -r $STATE_FILE ]]; then
         note "Recovering an interrupted previous run"
+        capture_stop_active
         stop_container
         restore_host_state
         [[ ${RESTORE_HOST_OK:-1} == 1 ]] || \
@@ -585,15 +628,17 @@ cmd_start() {
     fi
     preflight
 
-    local bluez_active=0 bluez_masked=0 bt_powered=0 adapter_index
+    local bluez_active=0 bluez_masked=0 bt_powered=0 adapter_index=''
     local modprobe_value address_hash route_hash policy_hash firewall_hash enabled_state
-    systemctl is-active --quiet bluetooth.service && bluez_active=1
-    enabled_state=$(systemctl is-enabled bluetooth.service 2>/dev/null || true)
-    [[ $enabled_state == masked || $enabled_state == masked-runtime ]] && bluez_masked=1
-    adapter_index=${BT_ADAPTER#hci}
-    [[ $adapter_index =~ ^[0-9]+$ ]] || die "BT_ADAPTER must look like hci0"
-    sudo btmgmt --index "$adapter_index" info 2>/dev/null \
-        | grep -Eq 'current settings:.*powered' && bt_powered=1
+    if [[ $BT_ENABLE == 1 ]]; then
+        systemctl is-active --quiet bluetooth.service && bluez_active=1
+        enabled_state=$(systemctl is-enabled bluetooth.service 2>/dev/null || true)
+        [[ $enabled_state == masked || $enabled_state == masked-runtime ]] && bluez_masked=1
+        adapter_index=${BT_ADAPTER#hci}
+        [[ $adapter_index =~ ^[0-9]+$ ]] || die "BT_ADAPTER must look like hci0"
+        sudo btmgmt --index "$adapter_index" info 2>/dev/null \
+            | grep -Eq 'current settings:.*powered' && bt_powered=1
+    fi
     modprobe_value=$(cat /proc/sys/kernel/modprobe)
     address_hash=$(network_hash address)
     route_hash=$(network_hash route)
@@ -605,12 +650,20 @@ cmd_start() {
     trap rollback_start EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    note "Stopping BlueZ and reserving $BT_ADAPTER for Android"
-    sudo systemctl mask --runtime bluetooth.service dbus-org.bluez.service >/dev/null
-    sudo systemctl stop bluetooth.service
-    systemctl is-active --quiet bluetooth.service && die "BlueZ restarted while reserving $BT_ADAPTER"
-    sudo btmgmt --index "$adapter_index" power off >/dev/null 2>&1 || true
+    if [[ $BT_ENABLE == 1 ]]; then
+        note "Stopping BlueZ and reserving $BT_ADAPTER for Android"
+        sudo systemctl mask --runtime bluetooth.service dbus-org.bluez.service >/dev/null
+        sudo systemctl stop bluetooth.service
+        systemctl is-active --quiet bluetooth.service && die "BlueZ restarted while reserving $BT_ADAPTER"
+        sudo btmgmt --index "$adapter_index" power off >/dev/null 2>&1 || true
+    fi
     mkdir -p "$REDROID_DATA_DIR"
+
+    # Without the host netns mount the btlinux HAL exits at once, so it can
+    # never open (and steal) the host adapter.
+    local netns_mount=()
+    [[ $BT_ENABLE == 0 ]] || \
+        netns_mount=(--mount "type=bind,source=$HOST_NETNS_SOURCE,target=/redroid-host-netns,readonly")
 
     note "Starting $CONTAINER_NAME with isolated Android networking"
     docker run -d \
@@ -619,7 +672,7 @@ cmd_start() {
         --privileged \
         --network bridge \
         --publish "$ADB_HOST:$ADB_PORT:5555" \
-        --mount "type=bind,source=$HOST_NETNS_SOURCE,target=/redroid-host-netns,readonly" \
+        "${netns_mount[@]}" \
         --volume "$REDROID_DATA_DIR:/data" \
         "$LOCAL_IMAGE" \
         androidboot.redroid_width="$REDROID_WIDTH" \
@@ -639,18 +692,28 @@ cmd_start() {
 
     wait_for_android
     verify_network_unchanged
-    wait_for_bluetooth
+    [[ $BT_ENABLE == 0 ]] || wait_for_bluetooth
     verify_native_bridge
     trap - EXIT INT TERM
     note "redroid is ready; run './redroid.sh screen'"
 }
 
 cmd_stop() {
+    local bt_managed=0
     acquire_lock
     require_runtime_tools
+    bt_managed_in_state && bt_managed=1
+    [[ $bt_managed == 0 ]] || require_bt_tools
+    capture_stop_active
     note "Stopping redroid"
     stop_container
     restore_host_state
+    [[ $bt_managed == 0 ]] || stop_check_bluetooth
+    [[ ${RESTORE_HOST_OK:-1} == 1 ]] || die "host network state was not fully restored"
+    [[ $bt_managed == 0 ]] || stop_report_bluetooth
+}
+
+stop_check_bluetooth() {
     if [[ -d /sys/class/bluetooth/$BT_ADAPTER ]]; then
         sudo btmgmt --index "${BT_ADAPTER#hci}" info >/dev/null || \
             die "host adapter '$BT_ADAPTER' did not become usable"
@@ -658,7 +721,9 @@ cmd_stop() {
     if [[ ${RESTORED_BT_SHOULD_BE_POWERED:-0} == 1 ]]; then
         adapter_is_powered || die "host adapter '$BT_ADAPTER' is not powered"
     fi
-    [[ ${RESTORE_HOST_OK:-1} == 1 ]] || die "host network state was not fully restored"
+}
+
+stop_report_bluetooth() {
     if systemctl is-active --quiet bluetooth.service; then
         note "Host Bluetooth restored"
     else
@@ -690,18 +755,23 @@ cmd_status() {
     container_status=$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)
     [[ -n $container_status ]] || container_status=absent
     echo "container: $container_status"
-    echo "bluez:     $(systemctl is-active bluetooth.service 2>/dev/null || true)"
-    echo "adapter:   $([[ -d /sys/class/bluetooth/$BT_ADAPTER ]] && echo present || echo absent)"
+    if bt_managed_in_state; then
+        echo "bluez:     $(systemctl is-active bluetooth.service 2>/dev/null || true)"
+        echo "adapter:   $([[ -d /sys/class/bluetooth/$BT_ADAPTER ]] && echo present || echo absent)"
+    fi
+    capture_active && echo "capture:   $(<"$CAPTURE_CURRENT")" || echo "capture:   none"
     adb connect "$ADB_SERIAL" >/dev/null 2>&1 || true
     if adb -s "$ADB_SERIAL" get-state >/dev/null 2>&1; then
         echo "android:   boot_completed=$(adb_shell getprop sys.boot_completed | tr -d '\r')"
         echo "abis:      $(adb_shell getprop ro.product.cpu.abilist | tr -d '\r')"
-        if grep -q 'HCI device ready' <<<"$(adb_shell logcat -d -v brief 2>/dev/null || true)"; then
-            echo "btlinux:   HCI device ready"
-        else
-            echo "btlinux:   no HCI-ready marker"
+        if bt_managed_in_state; then
+            if grep -q 'HCI device ready' <<<"$(adb_shell logcat -d -v brief 2>/dev/null || true)"; then
+                echo "btlinux:   HCI device ready"
+            else
+                echo "btlinux:   no HCI-ready marker"
+            fi
+            adb_shell dumpsys bluetooth_manager | grep -E 'enabled:|state:|address:|name:' | head -8
         fi
-        adb_shell dumpsys bluetooth_manager | grep -E 'enabled:|state:|address:|name:' | head -8
     else
         echo "android:   adb disconnected"
     fi
@@ -721,26 +791,210 @@ cmd_logs() {
     fi
 }
 
+CAPTURE_CURRENT=$STATE_DIR/capture.current
+
+capture_active() {
+    [[ -r $CAPTURE_CURRENT ]]
+}
+
+# True when PID still names a live process called NAME; guards against
+# signalling a recycled PID from a stale session.
+proc_is() {
+    [[ -n $2 && -r /proc/$2/comm && $(< "/proc/$2/comm") == "$1" ]]
+}
+
+# Android 14 reads trust anchors from the conscrypt APEX, older releases from
+# /system. Both are writable overlays in redroid, so copy the mitmproxy CA into
+# each. The copy lives in the container layer and is redone on every capture
+# start.
+install_mitm_ca() {
+    local ca=$HOME/.mitmproxy/mitmproxy-ca-cert.pem hash dir
+    [[ -r $ca ]] || { echo "warning: mitmproxy CA not found; HTTPS will not decode" >&2; return 0; }
+    hash=$(openssl x509 -inform PEM -subject_hash_old -in "$ca" -noout)
+    adb -s "$ADB_SERIAL" push "$ca" "/data/local/tmp/$hash.0" >/dev/null
+    for dir in /apex/com.android.conscrypt/cacerts /system/etc/security/cacerts; do
+        adb_shell su 0 sh -c "'cp /data/local/tmp/$hash.0 $dir/ && chmod 644 $dir/$hash.0'" || \
+            echo "warning: could not install the mitmproxy CA into $dir" >&2
+    done
+    adb_shell rm -f "/data/local/tmp/$hash.0"
+    adb_shell test -e "/apex/com.android.conscrypt/cacerts/$hash.0" || \
+        echo "warning: mitmproxy CA is not in the Android trust store; HTTPS will not decode" >&2
+}
+
+start_mitmproxy() {
+    local sess=$1 gateway=$2 port=$MITM_PORT attempts=0
+    while (( port <= 65535 && attempts < 100 )); do
+        note "Starting mitmproxy on $gateway:$port"
+        SSLKEYLOGFILE=$sess/sslkeylog.txt mitmdump --mode regular \
+            --listen-host "$gateway" --listen-port "$port" \
+            --set block_global=false -w "$sess/flows.mitm" \
+            >"$sess/mitm.log" 2>&1 9>&- &
+        echo $! >"$sess/mitm.pid"
+        sleep 2
+        if proc_is mitmdump "$(<"$sess/mitm.pid")"; then
+            echo "$gateway:$port" >"$sess/proxy"
+            return 0
+        fi
+        grep -qi 'address already in use' "$sess/mitm.log" || \
+            die "mitmproxy failed to start (see $sess/mitm.log)"
+        port=$((port + 1))
+        attempts=$((attempts + 1))
+    done
+    die "no free proxy port found from $MITM_PORT"
+}
+
+capture_start_abort() {
+    local exit_code=$?
+    trap - EXIT
+    (( exit_code == 0 )) || capture_stop_active
+    exit "$exit_code"
+}
+
+capture_start() {
+    local use_mitm=1 sess netns_pid gateway user
+    case ${1:-} in
+        '') ;;
+        --no-mitm) use_mitm=0 ;;
+        *) die "usage: $0 capture start [--no-mitm]" ;;
+    esac
+    need tcpdump
+    need nsenter
+    need timeout
+    [[ $use_mitm == 0 ]] || { need mitmdump; need openssl; }
+    container_running || die "container '$CONTAINER_NAME' is not running; run './redroid.sh start'"
+    capture_active && die "a capture is already running ($(<"$CAPTURE_CURRENT")); run '$0 capture stop'"
+
+    sess=$CAPTURE_DIR/$(date -u +%Y%m%d-%H%M%SZ)
+    mkdir -p "$sess"
+    printf '%s\n' "$sess" >"$CAPTURE_CURRENT"
+    trap capture_start_abort EXIT
+    note "Capture session: $sess"
+
+    # tcpdump runs inside the container's network namespace so it sees every
+    # packet (HTTPS, UDP/P2P, DNS, ...); it then drops to the invoking user so
+    # the pcap is user-owned. fd 9 is closed so the lifecycle lock is not inherited.
+    sudo -v
+    netns_pid=$(docker inspect -f '{{.State.Pid}}' "$CONTAINER_NAME")
+    user=$(id -un)
+    # The log redirect is deliberately made by the invoking user, not by sudo.
+    # shellcheck disable=SC2024
+    sudo sh -c 'echo $$ >"$1"; shift; exec "$@"' sh "$sess/tcpdump.pid" \
+        nsenter -t "$netns_pid" -n \
+        tcpdump -i any -U -Z "$user" -w "$sess/full.pcap" 'not tcp port 5555' \
+        >"$sess/tcpdump.log" 2>&1 9>&- &
+    sleep 2
+    proc_is tcpdump "$(cat "$sess/tcpdump.pid" 2>/dev/null)" || \
+        die "tcpdump failed to start (see $sess/tcpdump.log)"
+
+    if [[ $use_mitm == 1 ]]; then
+        gateway=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' "$CONTAINER_NAME")
+        [[ -n $gateway ]] || die "cannot resolve the container's Docker gateway"
+        start_mitmproxy "$sess" "$gateway"
+        adb connect "$ADB_SERIAL" >/dev/null 2>&1 || true
+        install_mitm_ca
+        note "Pointing Android at the proxy ($(<"$sess/proxy"))"
+        adb_shell settings put global http_proxy "$(<"$sess/proxy")"
+    else
+        note "mitmproxy disabled; capturing raw packets only"
+    fi
+    trap - EXIT
+    note "Capturing. Use the app, then run '$0 capture stop'"
+}
+
+capture_stop_active() {
+    local sess pid
+    capture_active || return 0
+    sess=$(<"$CAPTURE_CURRENT")
+    note "Stopping capture: $sess"
+
+    if [[ -e $sess/proxy ]]; then
+        timeout 10 adb -s "$ADB_SERIAL" shell settings put global http_proxy :0 \
+            >/dev/null 2>&1 || echo "warning: could not clear the Android proxy" >&2
+        pid=$(cat "$sess/mitm.pid" 2>/dev/null || true)
+        ! proc_is mitmdump "$pid" || kill "$pid" 2>/dev/null || true
+    fi
+    pid=$(cat "$sess/tcpdump.pid" 2>/dev/null || true)
+    if proc_is tcpdump "$pid"; then
+        sudo kill -INT "$pid" || true
+        timeout 10 sh -c "while [ -d /proc/$pid ]; do sleep 0.2; done" || true
+    fi
+    rm -f "$sess/tcpdump.pid" "$sess/mitm.pid" "$CAPTURE_CURRENT"
+
+    # Injecting mitmproxy's TLS keys lets Wireshark decrypt the HTTPS legs
+    # while non-proxied traffic stays raw.
+    if [[ -s $sess/sslkeylog.txt && -s $sess/full.pcap ]] && command -v editcap >/dev/null 2>&1; then
+        editcap --inject-secrets "tls,$sess/sslkeylog.txt" \
+            "$sess/full.pcap" "$sess/full-decrypted.pcapng" 2>/dev/null || \
+            echo "warning: TLS key injection failed; pair full.pcap with sslkeylog.txt manually" >&2
+    fi
+    note "Artifacts in $sess:"
+    find "$sess" -maxdepth 1 -type f -printf '    %-24f %k KiB\n'
+    [[ ! -s $sess/flows.mitm ]] || note "Read HTTP: mitmweb --rfile $sess/flows.mitm"
+    if [[ -s $sess/full-decrypted.pcapng ]]; then
+        note "Read all:  wireshark $sess/full-decrypted.pcapng"
+    else
+        note "Read all:  wireshark $sess/full.pcap"
+    fi
+}
+
+cmd_capture() {
+    local action=${1:-}
+    [[ $# -eq 0 ]] || shift
+    case $action in
+        start) acquire_lock; capture_start "$@" ;;
+        stop)
+            acquire_lock
+            capture_active || die "no active capture"
+            capture_stop_active
+            ;;
+        status) capture_active && echo "capturing: $(<"$CAPTURE_CURRENT")" || echo "no active capture" ;;
+        *) die "usage: $0 capture {start [--no-mitm]|stop|status}" ;;
+    esac
+}
+
+cmd_install() {
+    local files=() arg f
+    [[ $# -gt 0 ]] || die "usage: $0 install <apk|dir>..."
+    need adb
+    for arg; do
+        if [[ -d $arg ]]; then files+=("$arg"/*.apk); else files+=("$arg"); fi
+    done
+    for f in "${files[@]}"; do
+        [[ -f $f ]] || die "no such APK: $f"
+    done
+    adb connect "$ADB_SERIAL" >/dev/null 2>&1 || true
+    # A directory of split APKs (base + split_config.*) installs as one app.
+    if (( ${#files[@]} == 1 )); then
+        adb -s "$ADB_SERIAL" install -r -g "${files[0]}"
+    else
+        adb -s "$ADB_SERIAL" install-multiple -r -g "${files[@]}"
+    fi
+}
+
 usage() {
     cat <<'EOF'
-Usage: ./redroid.sh {setup|start|stop|screen|status|logs}
+Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|capture}
 
-  setup   Install missing Arch/Debian/Ubuntu tools and build the image
-  start   Give hci0 to Android, boot redroid, and validate Bluetooth/ARM
-  stop    Stop redroid and restore host Bluetooth
-  screen  Open the Android display with scrcpy
-  status  Show container, host Bluetooth, Android, and ABI status
-  logs    Collect container and Android Bluetooth diagnostics
+  setup    Install missing Arch/Debian/Ubuntu tools and build the image
+  start    Boot redroid; give hci0 to Android unless --no-bt (or BT_ENABLE=0)
+  stop     Stop redroid (ending any capture) and restore the host
+  screen   Open the Android display with scrcpy
+  status   Show container, host Bluetooth, Android, ABI, and capture status
+  logs     Collect container and Android Bluetooth diagnostics
+  install  Install an APK, several split APKs, or a directory of splits
+  capture  capture start [--no-mitm] | stop | status: pcap + decoded HTTPS
 EOF
 }
 
 load_config
 case ${1:-} in
     setup) cmd_setup ;;
-    start) cmd_start ;;
+    start) shift; cmd_start "$@" ;;
     stop) cmd_stop ;;
     screen) cmd_screen ;;
     status) cmd_status ;;
     logs) cmd_logs ;;
+    install) shift; cmd_install "$@" ;;
+    capture) shift; cmd_capture "$@" ;;
     *) usage; exit 2 ;;
 esac

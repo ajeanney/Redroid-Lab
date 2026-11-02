@@ -1,6 +1,6 @@
 # Redroid-Lab
 
-Toolbox around a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host. Today it provides physical Bluetooth passthrough (AOSP Linux-HCI HAL), Intel GPU, scrcpy and ARM64 translation. Planned (not implemented): packet capture and root-based app investigation. Human docs: [README.md](README.md), [README.fr.md](README.fr.md).
+Toolbox around a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host. Today it provides optional physical Bluetooth passthrough (AOSP Linux-HCI HAL), GPU acceleration, scrcpy, ARM64 translation, APK install and packet capture (tcpdump + mitmproxy). Planned (not implemented): root-based app investigation. Human docs: [README.md](README.md), [README.fr.md](README.fr.md).
 
 ## Local instructions (read first)
 
@@ -8,7 +8,7 @@ If `AGENTS.local.md` (or any `*.local.md` at the repo root) exists, read it befo
 
 ## Safety first (host-impacting project)
 
-`./redroid.sh start` stops and runtime-masks BlueZ, powers down `hci0`, starts a **privileged** container, and installs an nftables guard. `stop` reverses this. Treat these as host-changing operations.
+`./redroid.sh start` stops and runtime-masks BlueZ, powers down `hci0`, starts a **privileged** container, and installs an nftables guard. `stop` reverses this. `start --no-bt` (or `BT_ENABLE=0`) skips every Bluetooth step and the host-netns mount; the state file records `BT_MANAGED` so `stop` only restores what was taken. `capture start` runs `tcpdump` through `sudo`+`nsenter`, runs `mitmdump` on the Docker gateway, writes the mitmproxy CA into the guest and sets its global `http_proxy`; `capture stop` (also run by `stop`) undoes all of it. Treat these as host-changing operations.
 
 Allowed without asking:
 - Read any file; `git status`, `git diff`, `git log`
@@ -16,22 +16,23 @@ Allowed without asking:
 - `./redroid.sh status` (read-only)
 
 Ask first:
-- `./redroid.sh setup | start | stop | screen | logs` (installs packages, builds images, takes over Bluetooth, writes `.runtime/`)
+- `./redroid.sh setup | start | stop | screen | logs | install | capture` (installs packages, builds images, takes over Bluetooth, writes `.runtime/` and `captures/`)
 - Any `docker`, `systemctl`, `bluetoothctl`, `btmgmt`, `nft`, `modprobe` or `sudo` command
 - `git commit`, `git push`, deleting files, adding dependencies or changing pinned digests/checksums
 
 Never:
 - Run `systemctl start bluetooth` or touch `hci0` by hand while `.runtime/state.env` exists; the script owns recovery (use `./redroid.sh stop`, with approval)
 - Loosen the `ADB_HOST` loopback-only check or publish ADB on a non-loopback address
-- Commit `data/`, `.runtime/`, `.cache/`, APKs, keystores, logs, Bluetooth bonds or any `*.local.*` file
+- Commit `data/`, `.runtime/`, `.cache/`, `captures/`, APKs, keystores, logs, Bluetooth bonds or any `*.local.*` file
 - Put secrets, tokens or personal data in tracked files, including this one
 
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`. Lifecycle under a lock, state in `.runtime/state.env` |
-| `redroid.env` | Defaults (image, ports, adapter, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
+| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `capture`. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
+| `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, capture dir/port, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
+| `captures/` | Gitignored capture sessions (`full.pcap`, `flows.mitm`, `sslkeylog.txt`, `full-decrypted.pcapng`) |
 | `Dockerfile` | Overlay on the pinned redroid image; builds and installs the Bluetooth HAL |
 | `build-inputs.env` | Pinned source URLs and SHA-256 sums for the HAL build |
 | `build/` | `build-bt-hal.sh`, `validate-runtime.sh`, `btlinux-service.cc`, the HAL `.rc`, `build-arm64-smoke-apk.sh` |
@@ -57,12 +58,14 @@ Runtime verification (needs approval, real hardware, Binder-capable kernel):
 ./redroid.sh setup && ./redroid.sh start   # start fails closed and rolls back on any error
 ./redroid.sh status
 ./redroid.sh stop
+./redroid.sh start --no-bt && ./redroid.sh capture start   # no Bluetooth hardware needed
 ```
 
 There is no automated test suite. Hardware-dependent changes can only be verified by a human on a machine with a supported controller; say so instead of claiming verification.
 
 ## Code style
 
+- Background processes started by the script must close the lock fd (`9>&-`), and `adb` is wrapped to do so: an inherited fd 9 keeps the lifecycle lock held forever
 - Bash: `#!/usr/bin/env bash`, `set -Eeuo pipefail`, 4-space indent, quote every expansion, `[[ ]]` tests, `die`/`note`/`need` helpers for errors and progress
 - Keep ShellCheck clean; justify any `# shellcheck disable=` inline
 - Configuration belongs in `redroid.env` (add the key to the required-name list in `load_config`), never hardcoded in the script
