@@ -15,6 +15,7 @@ tests
 # Local configuration and generated artifacts are not image inputs
 redroid.local.env
 *.local.env
+*.local.md
 *.apk
 *.aab
 *.apks
@@ -25,4 +26,4 @@ redroid.local.env
 *.pid
 
 # Documentation is not needed by the image build
-README.md
+*.md

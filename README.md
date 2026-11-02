@@ -1,9 +1,29 @@
-# redroid 14 with physical Bluetooth and ARM64 translation
+# Redroid-Lab
 
-Run a pinned Android 14 redroid container on an x86_64 Linux host, with persistent data, Intel GPU acceleration, loopback-only ADB and scrcpy, ARM64 application translation, and — the point of the project — working access to a real physical Bluetooth controller.
+A toolbox for running and investigating a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host: persistent data, Intel GPU acceleration, loopback-only ADB and scrcpy, ARM64 application translation, and working access to a real physical Bluetooth controller.
+
+The project started as a Bluetooth-passthrough image and is growing into a
+general lab for poking at Android apps: packet capture, root-level app
+inspection, and similar reverse-engineering workflows.
+
+## Scope
+
+| Capability | Status |
+| --- | --- |
+| Pinned redroid 14 image with persistent data, Intel GPU, scrcpy | Available |
+| ARM64 application translation (`libndk_translation`) | Available |
+| Physical Bluetooth passthrough (AOSP Linux-HCI HAL) | Available |
+| Network packet capture from the container | Planned |
+| Root-based app investigation tooling | Planned |
+
+"Planned" rows are goals; none is implemented yet.
+
+Contributors and AI coding agents: see [AGENTS.md](AGENTS.md).
+
+## Physical Bluetooth
 
 Physical Bluetooth is not supported by stock redroid: the upstream image uses
-a simulated controller. This project replaces that simulation with AOSP's
+a simulated controller. Redroid-Lab replaces that simulation with AOSP's
 small Linux-HCI (`btlinux`) HAL. The integration works on the reference machine,
 but remains an out-of-tree, privileged configuration and should be evaluated
 accordingly.
@@ -247,7 +267,7 @@ dependencies, and strong undefined symbols against the exact base image. A full
 AOSP checkout is not required.
 
 Git excludes persistent Android data, runtime ownership state, logs, generated
-APKs, signing material, caches, and local configuration overrides. Docker's
+APKs, signing material, caches, and local configuration overrides (including `*.local.md` agent notes). Docker's
 build context excludes the same host-only content. Review `git status --ignored`
 before the first commit to confirm that no application data or pairing material
 will be shared.

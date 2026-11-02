@@ -37,7 +37,7 @@ RUN /usr/local/bin/validate-runtime \
 
 FROM ${BASE_IMAGE}
 
-LABEL org.opencontainers.image.title="redroid 14 with experimental Linux-HCI Bluetooth HAL" \
+LABEL org.opencontainers.image.title="Redroid-Lab: redroid 14 with experimental Linux-HCI Bluetooth HAL" \
       org.opencontainers.image.description="Pinned redroid 14 plus AOSP btlinux HIDL 1.1 service"
 
 COPY --from=bt_builder --chmod=0755 \

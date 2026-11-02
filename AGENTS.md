@@ -1,0 +1,84 @@
+# Redroid-Lab
+
+Toolbox around a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host. Today it provides physical Bluetooth passthrough (AOSP Linux-HCI HAL), Intel GPU, scrcpy and ARM64 translation. Planned (not implemented): packet capture and root-based app investigation. Human docs: [README.md](README.md), [README.fr.md](README.fr.md).
+
+## Local instructions (read first)
+
+If `AGENTS.local.md` (or any `*.local.md` at the repo root) exists, read it before doing anything else. It holds machine-specific agent instructions, is gitignored, and takes precedence over this file on conflict. Never commit it or copy its contents into tracked files.
+
+## Safety first (host-impacting project)
+
+`./redroid.sh start` stops and runtime-masks BlueZ, powers down `hci0`, starts a **privileged** container, and installs an nftables guard. `stop` reverses this. Treat these as host-changing operations.
+
+Allowed without asking:
+- Read any file; `git status`, `git diff`, `git log`
+- `bash -n redroid.sh build/*.sh`, `shellcheck redroid.sh build/*.sh`
+- `./redroid.sh status` (read-only)
+
+Ask first:
+- `./redroid.sh setup | start | stop | screen | logs` (installs packages, builds images, takes over Bluetooth, writes `.runtime/`)
+- Any `docker`, `systemctl`, `bluetoothctl`, `btmgmt`, `nft`, `modprobe` or `sudo` command
+- `git commit`, `git push`, deleting files, adding dependencies or changing pinned digests/checksums
+
+Never:
+- Run `systemctl start bluetooth` or touch `hci0` by hand while `.runtime/state.env` exists; the script owns recovery (use `./redroid.sh stop`, with approval)
+- Loosen the `ADB_HOST` loopback-only check or publish ADB on a non-loopback address
+- Commit `data/`, `.runtime/`, `.cache/`, APKs, keystores, logs, Bluetooth bonds or any `*.local.*` file
+- Put secrets, tokens or personal data in tracked files, including this one
+
+## Layout
+
+| Path | Purpose |
+| --- | --- |
+| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`. Lifecycle under a lock, state in `.runtime/state.env` |
+| `redroid.env` | Defaults (image, ports, adapter, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
+| `Dockerfile` | Overlay on the pinned redroid image; builds and installs the Bluetooth HAL |
+| `build-inputs.env` | Pinned source URLs and SHA-256 sums for the HAL build |
+| `build/` | `build-bt-hal.sh`, `validate-runtime.sh`, `btlinux-service.cc`, the HAL `.rc`, `build-arm64-smoke-apk.sh` |
+| `tests/arm64-smoke-app/` | Source of the ARM64-only JNI smoke APK installed and removed by `start` |
+
+The `btlinux` name in HAL files, binaries and `redroid.sh` messages is AOSP's component name (`android.hardware.bluetooth@1.1-service.btlinux`), not the old project name. Do not rename it.
+
+## Commands
+
+File-scoped checks (preferred, no side effects):
+
+```sh
+bash -n redroid.sh
+shellcheck redroid.sh            # also: shellcheck build/<file>.sh
+git diff --check
+```
+
+Both `bash -n` and `shellcheck` are clean today (rc 0); keep them clean.
+
+Runtime verification (needs approval, real hardware, Binder-capable kernel):
+
+```sh
+./redroid.sh setup && ./redroid.sh start   # start fails closed and rolls back on any error
+./redroid.sh status
+./redroid.sh stop
+```
+
+There is no automated test suite. Hardware-dependent changes can only be verified by a human on a machine with a supported controller; say so instead of claiming verification.
+
+## Code style
+
+- Bash: `#!/usr/bin/env bash`, `set -Eeuo pipefail`, 4-space indent, quote every expansion, `[[ ]]` tests, `die`/`note`/`need` helpers for errors and progress
+- Keep ShellCheck clean; justify any `# shellcheck disable=` inline
+- Configuration belongs in `redroid.env` (add the key to the required-name list in `load_config`), never hardcoded in the script
+- Fail closed: every host mutation needs a matching restore path in `restore_host_state`/`rollback_start`, and `stop` must stay idempotent
+- New tools (capture, root inspection, ...) go in separate subcommands or scripts; do not grow `cmd_start` and do not weaken its validations
+- Pin every downloaded input with a checksum in `build-inputs.env`; no floating tags or `latest`
+
+Good pattern: `validate_adapter_identity` and `restore_host_state` in `redroid.sh` (explicit checks, clear errors, restore paths). Avoid: ad-hoc `sudo` calls outside the existing helpers.
+
+## Docs and commits
+
+- Keep `README.md` and `README.fr.md` in sync; update both when behavior, commands or config change. Update this file when commands or layout change
+- Do not mark planned features as available in either README
+- Commits: short imperative subject, one logical change each; do not push without approval
+- Docker build context excludes `*.md`, `tests/`, `data/`, `.runtime/`; if the Dockerfile needs a new input, check `.dockerignore`
+
+## When stuck
+
+Ask a clarifying question rather than guessing about hardware, adapter IDs (`BT_EXPECTED_USB_ID`), or anything that touches host Bluetooth/network state. If a lifecycle command fails repeatedly, stop and report the output; do not retry in a loop.

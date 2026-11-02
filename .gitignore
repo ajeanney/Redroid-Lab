@@ -11,6 +11,10 @@
 redroid.local.env
 *.local.env
 
+# Machine-specific agent instructions
+AGENTS.local.md
+*.local.md
+
 # Generated Android packages and signing material
 *.apk
 *.aab

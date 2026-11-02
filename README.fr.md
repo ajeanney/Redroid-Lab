@@ -1,9 +1,30 @@
-# redroid 14 avec Bluetooth physique et traduction ARM64
+# Redroid-Lab
 
-Faites tourner un conteneur redroid Android 14 épinglé sur un hôte Linux x86_64, avec des données persistantes, l'accélération GPU Intel, ADB et scrcpy limités à la loopback, la traduction des applications ARM64 et — l'intérêt du projet — un accès fonctionnel à un vrai contrôleur Bluetooth physique.
+Une boîte à outils pour exécuter et analyser un conteneur [redroid](https://github.com/remote-android/redroid-doc) Android 14 épinglé sur un hôte Linux x86_64 : données persistantes, accélération GPU Intel, ADB et scrcpy limités à la loopback, traduction des applications ARM64 et accès fonctionnel à un vrai contrôleur Bluetooth physique.
+
+Le projet est parti d'une image de passthrough Bluetooth et devient un laboratoire
+général pour explorer des applications Android : capture de paquets réseau,
+inspection d'applications avec les droits root et workflows de rétro-ingénierie
+similaires.
+
+## Périmètre
+
+| Capacité | État |
+| --- | --- |
+| Image redroid 14 épinglée avec données persistantes, GPU Intel, scrcpy | Disponible |
+| Traduction des applications ARM64 (`libndk_translation`) | Disponible |
+| Bluetooth physique en passthrough (HAL Linux-HCI d'AOSP) | Disponible |
+| Capture de paquets réseau depuis le conteneur | Prévu |
+| Outillage d'investigation d'applications avec root | Prévu |
+
+Les lignes « Prévu » sont des objectifs ; aucune n'est encore implémentée.
+
+Contributeurs et agents de codage IA : voir [AGENTS.md](AGENTS.md).
+
+## Bluetooth physique
 
 Le Bluetooth physique n'est pas pris en charge par redroid en l'état : l'image
-amont utilise un contrôleur simulé. Ce projet remplace cette simulation par le
+amont utilise un contrôleur simulé. Redroid-Lab remplace cette simulation par le
 petit HAL Linux-HCI (`btlinux`) d'AOSP. L'intégration fonctionne sur la machine de
 référence, mais reste une configuration hors arbre et privilégiée, à évaluer en
 conséquence.
@@ -257,7 +278,7 @@ n'est pas nécessaire.
 
 Git exclut les données Android persistantes, l'état de propriété à l'exécution,
 les logs, les APK générés, le matériel de signature, les caches et les
-surcharges de configuration locales. Le contexte de compilation Docker exclut
+surcharges de configuration locales (y compris les notes d'agent `*.local.md`). Le contexte de compilation Docker exclut
 les mêmes contenus propres à l'hôte. Vérifiez `git status --ignored` avant le
 premier commit pour confirmer qu'aucune donnée d'application ni aucun élément
 d'appairage ne sera partagé.
