@@ -47,7 +47,7 @@ Upstream references:
 | Ubuntu 22.04 LTS | Clean installation of the complete host dependency set; Bash 5.1 syntax and command-path audit | Compatible; hardware run still required |
 | Ubuntu 24.04 LTS | Clean installation of the complete host dependency set; Bash 5.2 syntax and command-path audit | Compatible; hardware run still required |
 | Debian | Package mapping and Binder guidance are implemented | Best effort; not hardware-tested |
-| Arch Linux x86_64, AMD Lucienne GPU, Realtek `0bda:2852` Bluetooth | Build, `start --no-bt` boot on the host GPU, ARM64 bridge properties, split-APK install, packet capture with decoded HTTPS from a real app | Verified without Bluetooth; passthrough not tested on this adapter |
+| Arch Linux x86_64, AMD Lucienne GPU, Realtek `0bda:2852` Bluetooth | Build, boot on the host GPU, ARM64 bridge properties, real Bluetooth inquiry that found nearby devices, BlueZ restoration, split-APK install, packet capture with decoded HTTPS from a real app | Verified |
 
 The Ubuntu checks confirm that the setup's dependencies and shell interfaces
 are available on both LTS releases. They cannot substitute for an end-to-end
@@ -78,15 +78,21 @@ same time.
 - x86_64 Linux with systemd and Docker
 - Binder IPC and BinderFS in the running kernel
 - DRM render node at `/dev/dri/renderD128` (Intel is the reference; `setup` only warns on other vendors, and an AMD GPU boots in host mode; if yours does not, set `REDROID_GPU_MODE=guest` in a local config)
-- for Bluetooth passthrough only: a controller exposed as `hci0` and driven by `btusb`
+- for Bluetooth passthrough only: a controller exposed as `hciN` (any vendor; `btusb` for the reset fallback)
 - for capture: `tcpdump`, `mitmproxy`, Wireshark's `editcap` and `nsenter`; `setup` installs them on Arch, Debian and Ubuntu, and `capture start` needs `sudo` for tcpdump
 - approximately 10 GB of free space for images, build inputs, and cache
 - outbound HTTPS access during the initial build
 
-The checked-in defaults identify the reference Intel AX211 by USB ID
-`8087:0033`. On another machine, verify the intended adapter and update or clear
-`BT_EXPECTED_USB_ID` in `redroid.env`. Clearing it disables the hardware identity
-guard; it does not make unsupported adapters safe automatically.
+The passthrough is adapter-agnostic: it uses the kernel's exclusive
+`HCI_CHANNEL_USER` socket, so any controller that Linux exposes as `hciN`
+should work, whatever its vendor (verified on an Intel AX211 and a Realtek
+`0bda:2852`). Set `BT_ADAPTER` to the right index (default `hci0`; the HAL reads
+it from a system property, so it need not be 0). To refuse anything but one
+known controller, set `BT_EXPECTED_USB_ID` (for example `8087:0033`) in
+`redroid.env`; it is empty by default. The adapter must already have its
+firmware loaded, which BlueZ does when it powers the adapter at boot. Only one
+adapter is passed through, and the guarded `btusb` reset fallback only applies
+to USB controllers.
 
 ### Ubuntu 22.04 and 24.04
 
@@ -162,6 +168,7 @@ and restores the host's previous BlueZ and adapter power state.
 | `./redroid.sh status` | Show container, Android, ABI, BlueZ, and btlinux readiness |
 | `./redroid.sh logs` | Print Bluetooth diagnostics and save HCI snoop data when available |
 | `./redroid.sh install <apk\|dir>...` | Install one APK, several split APKs, or a directory of splits (`base.apk` + `split_config.*.apk`) |
+| `./redroid.sh launch <package>` | Start an installed app headlessly (then watch it with `screen`) |
 | `./redroid.sh capture start [--no-mitm]` | Record all container traffic to `captures/<UTC timestamp>/` |
 | `./redroid.sh capture stop` / `status` | End the session and write the artifacts / show the active session |
 
@@ -202,6 +209,7 @@ No Google services or Play Store are included.
 ./redroid.sh start --no-bt
 ./redroid.sh install ./some-app-splits/
 ./redroid.sh capture start       # --no-mitm for raw packets only
+./redroid.sh launch com.example.app
 # ... drive the app with ./redroid.sh screen ...
 ./redroid.sh capture stop
 ```

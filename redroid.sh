@@ -141,8 +141,8 @@ validate_adapter_identity() {
     local interface_path usb_path usb_id
     [[ -d /sys/class/bluetooth/$BT_ADAPTER ]] || \
         die "Bluetooth adapter '$BT_ADAPTER' is unavailable"
-    [[ $BT_ADAPTER == hci0 ]] || \
-        die "the pinned AOSP btlinux HAL supports only hci0"
+    [[ $BT_ADAPTER =~ ^hci[0-9]+$ ]] || \
+        die "BT_ADAPTER must look like hci0"
     if [[ -n ${BT_EXPECTED_USB_ID:-} ]]; then
         interface_path=$(readlink -f "/sys/class/bluetooth/$BT_ADAPTER/device")
         usb_path=$interface_path
@@ -155,7 +155,7 @@ validate_adapter_identity() {
             die "cannot identify the USB controller behind '$BT_ADAPTER'; clear BT_EXPECTED_USB_ID to allow an unverified adapter"
         usb_id=$(<"$usb_path/idVendor"):$(<"$usb_path/idProduct")
         [[ $usb_id == "$BT_EXPECTED_USB_ID" ]] || \
-            die "'$BT_ADAPTER' is USB $usb_id, expected $BT_EXPECTED_USB_ID (Intel AX211)"
+            die "'$BT_ADAPTER' is USB $usb_id, expected $BT_EXPECTED_USB_ID"
     fi
 }
 
@@ -168,7 +168,9 @@ preflight() {
     [[ $BT_ENABLE == 0 ]] || validate_adapter_identity
     [[ -e /dev/dri/renderD128 ]] || \
         die "Intel render node /dev/dri/renderD128 is unavailable"
-    [[ $BT_ENABLE == 0 || -e $HOST_NETNS_SOURCE ]] || \
+    # -L: the magic /proc/1/ns/net link is not stat-able by non-root users;
+    # Docker resolves it as root when bind-mounting.
+    [[ $BT_ENABLE == 0 || -e $HOST_NETNS_SOURCE || -L $HOST_NETNS_SOURCE ]] || \
         die "host network namespace is unavailable at '$HOST_NETNS_SOURCE'"
     if ss -H -ltn "sport = :$ADB_PORT" | grep -q .; then
         die "TCP port $ADB_PORT is already in use"
@@ -686,7 +688,8 @@ cmd_start() {
         ro.product.cpu.abilist32=x86 \
         ro.dalvik.vm.isa.arm64=x86_64 \
         ro.enable.native.bridge.exec=1 \
-        ro.dalvik.vm.native.bridge="$REDROID_NATIVE_BRIDGE" >/dev/null
+        ro.dalvik.vm.native.bridge="$REDROID_NATIVE_BRIDGE" \
+        ro.redroid.bt.hci="${BT_ADAPTER#hci}" >/dev/null
 
     printf 'FIREWALL_RUNTIME_HASH=%q\n' "$(network_hash firewall)" >>"$STATE_FILE"
 
@@ -971,9 +974,20 @@ cmd_install() {
     fi
 }
 
+cmd_launch() {
+    local package=${1:-} activity
+    [[ -n $package ]] || die "usage: $0 launch <package>"
+    need adb
+    adb connect "$ADB_SERIAL" >/dev/null 2>&1 || true
+    # am start on the resolved activity is reliable; monkey is not under ARM translation.
+    activity=$(adb_shell cmd package resolve-activity --brief "$package" | tail -1 | tr -d '\r')
+    [[ $activity == */* ]] || die "no launcher activity found for '$package'"
+    adb_shell am start -n "$activity"
+}
+
 usage() {
     cat <<'EOF'
-Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|capture}
+Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|launch|capture}
 
   setup    Install missing Arch/Debian/Ubuntu tools and build the image
   start    Boot redroid; give hci0 to Android unless --no-bt (or BT_ENABLE=0)
@@ -982,6 +996,7 @@ Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|capture}
   status   Show container, host Bluetooth, Android, ABI, and capture status
   logs     Collect container and Android Bluetooth diagnostics
   install  Install an APK, several split APKs, or a directory of splits
+  launch   Start an installed app by package name
   capture  capture start [--no-mitm] | stop | status: pcap + decoded HTTPS
 EOF
 }
@@ -995,6 +1010,7 @@ case ${1:-} in
     status) cmd_status ;;
     logs) cmd_logs ;;
     install) shift; cmd_install "$@" ;;
+    launch) shift; cmd_launch "$@" ;;
     capture) shift; cmd_capture "$@" ;;
     *) usage; exit 2 ;;
 esac

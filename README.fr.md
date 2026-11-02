@@ -49,7 +49,7 @@ Références amont :
 | Ubuntu 22.04 LTS | Installation propre de l'ensemble des dépendances de l'hôte ; audit de syntaxe Bash 5.1 et des chemins de commandes | Compatible ; test matériel encore nécessaire |
 | Ubuntu 24.04 LTS | Installation propre de l'ensemble des dépendances de l'hôte ; audit de syntaxe Bash 5.2 et des chemins de commandes | Compatible ; test matériel encore nécessaire |
 | Debian | Correspondance des paquets et indications Binder implémentées | Au mieux ; non testé sur matériel |
-| Arch Linux x86_64, GPU AMD Lucienne, Bluetooth Realtek `0bda:2852` | Compilation, démarrage `start --no-bt` sur le GPU de l'hôte, propriétés du bridge ARM64, installation d'APK découpés, capture de paquets avec HTTPS décodé depuis une vraie application | Vérifié sans Bluetooth ; passthrough non testé sur cet adaptateur |
+| Arch Linux x86_64, GPU AMD Lucienne, Bluetooth Realtek `0bda:2852` | Compilation, démarrage sur le GPU de l'hôte, propriétés du bridge ARM64, vraie recherche Bluetooth ayant trouvé des appareils proches, restauration de BlueZ, installation d'APK découpés, capture de paquets avec HTTPS décodé depuis une vraie application | Vérifié |
 
 Les vérifications Ubuntu confirment que les dépendances et les interfaces shell
 de l'installation sont disponibles sur les deux versions LTS. Elles ne
@@ -81,16 +81,21 @@ Android ne peuvent pas le posséder en même temps.
 - Linux x86_64 avec systemd et Docker
 - IPC Binder et BinderFS dans le noyau en cours d'exécution
 - nœud de rendu DRM sur `/dev/dri/renderD128` (Intel est la référence ; `setup` ne fait que prévenir pour les autres fabricants, et un GPU AMD démarre en mode hôte ; sinon, mettez `REDROID_GPU_MODE=guest` dans une configuration locale)
-- pour le passthrough Bluetooth uniquement : un contrôleur exposé en `hci0` et piloté par `btusb`
+- pour le passthrough Bluetooth uniquement : un contrôleur exposé en `hciN` (tout fabricant ; `btusb` pour la réinitialisation de secours)
 - pour la capture : `tcpdump`, `mitmproxy`, `editcap` de Wireshark et `nsenter` ; `setup` les installe sur Arch, Debian et Ubuntu, et `capture start` a besoin de `sudo` pour tcpdump
 - environ 10 Go d'espace libre pour les images, les entrées de compilation et le cache
 - un accès HTTPS sortant pendant la compilation initiale
 
-Les valeurs par défaut du dépôt identifient l'Intel AX211 de référence par son
-identifiant USB `8087:0033`. Sur une autre machine, vérifiez l'adaptateur visé et
-mettez à jour ou videz `BT_EXPECTED_USB_ID` dans `redroid.env`. Le vider désactive la
-garde d'identité matérielle ; cela ne rend pas les adaptateurs non pris en
-charge sûrs pour autant.
+Le passthrough ne dépend pas d'un fabricant : il utilise le socket exclusif
+`HCI_CHANNEL_USER` du noyau, donc tout contrôleur que Linux expose en `hciN`
+devrait fonctionner (vérifié sur un Intel AX211 et un Realtek `0bda:2852`).
+Réglez `BT_ADAPTER` sur le bon indice (`hci0` par défaut ; le HAL le lit dans une
+propriété système, il n'a donc pas à valoir 0). Pour refuser tout contrôleur
+autre qu'un seul connu, renseignez `BT_EXPECTED_USB_ID` (par exemple `8087:0033`)
+dans `redroid.env` ; il est vide par défaut. Le firmware de l'adaptateur doit
+déjà être chargé, ce que BlueZ fait en l'alimentant au démarrage. Un seul
+adaptateur est transmis, et la réinitialisation `btusb` de secours ne
+s'applique qu'aux contrôleurs USB.
 
 ### Ubuntu 22.04 et 24.04
 
@@ -168,6 +173,7 @@ l'alimentation de l'adaptateur.
 | `./redroid.sh status` | Affiche l'état du conteneur, d'Android, de l'ABI, de BlueZ et de btlinux |
 | `./redroid.sh logs` | Affiche les diagnostics Bluetooth et enregistre les données HCI snoop quand elles existent |
 | `./redroid.sh install <apk\|dossier>...` | Installe un APK, plusieurs APK découpés, ou un dossier de fragments (`base.apk` + `split_config.*.apk`) |
+| `./redroid.sh launch <paquet>` | Lance une application installée sans interface (à suivre avec `screen`) |
 | `./redroid.sh capture start [--no-mitm]` | Enregistre tout le trafic du conteneur dans `captures/<horodatage UTC>/` |
 | `./redroid.sh capture stop` / `status` | Termine la session et écrit les artefacts / affiche la session active |
 
@@ -209,6 +215,7 @@ Aucun service Google ni Play Store n'est inclus.
 ./redroid.sh start --no-bt
 ./redroid.sh install ./fragments-de-l-appli/
 ./redroid.sh capture start       # --no-mitm : paquets bruts uniquement
+./redroid.sh launch com.exemple.appli
 # ... utilisez l'application avec ./redroid.sh screen ...
 ./redroid.sh capture stop
 ```

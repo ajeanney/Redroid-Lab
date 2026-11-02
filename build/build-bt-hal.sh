@@ -71,6 +71,13 @@ mv /opt/android-ndk-r27d /opt/android-ndk
 sed -i '/support\/xlocale\/__posix_l_fallback.h/d' \
     /work/vndk/include/external/libcxx/include/support/android/locale_bionic.h
 
+# The pinned HAL hardcodes hci0. Read the index from a system property instead
+# (redroid.sh passes ro.redroid.bt.hci) so any adapter can be used; the default
+# stays 0. Applied after the source checksum was verified, like the edit above.
+sed -i -e 's/int hci_interface = 0;/int hci_interface = ::android::base::GetIntProperty("ro.redroid.bt.hci", 0);/' \
+    -e '1i #include <android-base/properties.h>' /work/source/bluetooth_hci.cc
+grep -q 'GetIntProperty("ro.redroid.bt.hci"' /work/source/bluetooth_hci.cc
+
 toolchain=/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64
 cxx=$toolchain/bin/x86_64-linux-android30-clang++
 

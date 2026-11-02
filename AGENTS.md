@@ -16,7 +16,7 @@ Allowed without asking:
 - `./redroid.sh status` (read-only)
 
 Ask first:
-- `./redroid.sh setup | start | stop | screen | logs | install | capture` (installs packages, builds images, takes over Bluetooth, writes `.runtime/` and `captures/`)
+- `./redroid.sh setup | start | stop | screen | logs | install | launch | capture` (installs packages, builds images, takes over Bluetooth, writes `.runtime/` and `captures/`)
 - Any `docker`, `systemctl`, `bluetoothctl`, `btmgmt`, `nft`, `modprobe` or `sudo` command
 - `git commit`, `git push`, deleting files, adding dependencies or changing pinned digests/checksums
 
@@ -30,12 +30,12 @@ Never:
 
 | Path | Purpose |
 | --- | --- |
-| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `capture`. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
+| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `launch`, `capture`. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
 | `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, capture dir/port, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
 | `captures/` | Gitignored capture sessions (`full.pcap`, `flows.mitm`, `sslkeylog.txt`, `full-decrypted.pcapng`) |
 | `Dockerfile` | Overlay on the pinned redroid image; builds and installs the Bluetooth HAL |
 | `build-inputs.env` | Pinned source URLs and SHA-256 sums for the HAL build |
-| `build/` | `build-bt-hal.sh`, `validate-runtime.sh`, `btlinux-service.cc`, the HAL `.rc`, `build-arm64-smoke-apk.sh` |
+| `build/` | `build-bt-hal.sh` (also patches the HAL to read the HCI index from `ro.redroid.bt.hci`), `validate-runtime.sh`, `btlinux-service.cc`, the HAL `.rc`, `build-arm64-smoke-apk.sh` |
 | `tests/arm64-smoke-app/` | Source of the ARM64-only JNI smoke APK installed and removed by `start` |
 
 The `btlinux` name in HAL files, binaries and `redroid.sh` messages is AOSP's component name (`android.hardware.bluetooth@1.1-service.btlinux`), not the old project name. Do not rename it.
