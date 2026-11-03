@@ -85,6 +85,7 @@ class SnapshotTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         shutil.copy2(REPO / "redroid.sh", self.root)
+        shutil.copytree(REPO / "lib", self.root / "lib")
         config = (REPO / "redroid.env").read_text()
         config += "\nREDROID_DATA_DIR={}\nSNAPSHOT_DIR={}\nBOOT_TIMEOUT=1\n".format(
             shlex.quote(str(self.root / "data")),

@@ -16,6 +16,7 @@ captures
 apps
 tests
 frida
+lib
 
 # Local configuration and generated artifacts are not image inputs
 redroid.local.env

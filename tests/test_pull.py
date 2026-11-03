@@ -73,6 +73,7 @@ class PullTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         shutil.copy2(REPO / "redroid.sh", self.root)
+        shutil.copytree(REPO / "lib", self.root / "lib")
         shutil.copy2(REPO / "redroid.env", self.root)
         self.bin = self.root / "bin"
         self.bin.mkdir()

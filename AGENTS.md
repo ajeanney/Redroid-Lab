@@ -12,7 +12,7 @@ If `AGENTS.local.md` (or any `*.local.md` at the repo root) exists, read it befo
 
 Allowed without asking:
 - Read any file; `git status`, `git diff`, `git log`
-- `bash -n redroid.sh build/*.sh`, `shellcheck redroid.sh build/*.sh`
+- `bash -n redroid.sh lib/*.sh build/*.sh`, `shellcheck redroid.sh lib/*.sh build/*.sh`
 - `./redroid.sh status` (read-only)
 
 Ask first:
@@ -30,7 +30,9 @@ Never:
 
 | Path | Purpose |
 | --- | --- |
-| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `pull`, `launch`, `snapshot`, `capture`, `frida`. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
+| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `pull`, `launch`, `snapshot`, `capture`, `frida`. Defines paths, sources `lib/`, dispatches. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
+| `lib/` | Sourced by `redroid.sh`, one area per file: `common.sh` (messages, config, lock, Docker/ADB wrappers), `setup.sh`, `bluetooth.sh` (host takeover/restore), `lifecycle.sh` (`start`/`stop`/`screen`/`status`/`logs`, host state), `capture.sh`, `apps.sh` (`install`/`pull`/`launch`), `snapshot.sh`, `frida.sh`. Keep each under ~600 lines |
+| `.shellcheckrc` | Lets `shellcheck redroid.sh` follow the sourced `lib/` files |
 | `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, APK/snapshot/capture directories, capture/Frida ports, transparent table/group, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
 | `apps/` | Gitignored pulls (`<package>/<UTC timestamp>-<random suffix>/`): APKs/splits plus optional `apktool/` and `jadx/` output; set `PULL_DIR` to override |
 | `snapshots/` | Gitignored named copies of Android data (`<name>/data/`); `snapshot save\|restore <name>` stops the existing container and restarts it only if it was running |
@@ -53,8 +55,8 @@ The `btlinux` name in HAL files, binaries and `redroid.sh` messages is AOSP's co
 File-scoped checks (preferred, no side effects):
 
 ```sh
-bash -n redroid.sh
-shellcheck redroid.sh            # also: shellcheck build/<file>.sh
+bash -n redroid.sh lib/*.sh
+shellcheck redroid.sh lib/*.sh   # also: shellcheck build/<file>.sh
 git diff --check
 python3 tests/test_capture.py    # fake namespaces/firewall/processes; no root or network
 python3 tests/test_pull.py       # temporary files and fake ADB/analysis tools
@@ -76,23 +78,24 @@ Capture, pull and snapshot tests cover file operations and mocked command/lifecy
 
 ## Code style
 
-- Background processes started by the script must close the lock fd (`9>&-`), and `adb` is wrapped to do so: an inherited fd 9 keeps the lifecycle lock held forever
+- Background processes started by the script must close the lock fd (`9>&-`), and `adb` is wrapped to do so (`adb_timeout` for `timeout adb`): an inherited fd 9 keeps the lifecycle lock held forever
 - Bash: `#!/usr/bin/env bash`, `set -Eeuo pipefail`, 4-space indent, quote every expansion, `[[ ]]` tests, `die`/`note`/`need` helpers for errors and progress
 - Keep ShellCheck clean; justify any `# shellcheck disable=` inline
-- Configuration belongs in `redroid.env` (add the key to the required-name list in `load_config`), never hardcoded in the script
+- Configuration belongs in `redroid.env` (add the key to the required-name list in `load_config` in `lib/common.sh`), never hardcoded in the script
+- Reuse the helpers in `lib/common.sh` (`need a b c`, `warn`, `adb_dev`, `adb_connect`, `require_running`, `trap_exit`, `stamped_dir`) instead of repeating their bodies
 - Transparent capture must verify namespace identity after entry, reject the host netns, and delete only its own table. Cleanup failures must retain capture state for retry; only unload `nft_redir` if this capture loaded it.
 - Fail closed: every host mutation needs a matching restore path in `restore_host_state`/`rollback_start`, and `stop` must stay idempotent
-- New tools (capture, root inspection, ...) go in separate subcommands or scripts; do not grow `cmd_start` and do not weaken its validations
+- New tools (capture, root inspection, ...) go in separate subcommands with their own `lib/<area>.sh` (sourced from `redroid.sh`); do not grow `cmd_start` and do not weaken its validations
 - Pin every downloaded input with a checksum in `build-inputs.env`; no floating tags or `latest`
 
-Good pattern: `validate_adapter_identity` and `restore_host_state` in `redroid.sh` (explicit checks, clear errors, restore paths). Avoid: ad-hoc `sudo` calls outside the existing helpers.
+Good pattern: `validate_adapter_identity` (`lib/bluetooth.sh`) and `restore_host_state` (`lib/lifecycle.sh`): explicit checks, clear errors, restore paths. Avoid: ad-hoc `sudo` calls outside the existing helpers.
 
 ## Docs and commits
 
 - Keep `README.md` and `README.fr.md` in sync; update both when behavior, commands or config change. Update this file when commands or layout change
 - Do not mark planned features as available in either README
 - Commits: short imperative subject, one logical change each; do not push without approval
-- Docker build context excludes `*.md`, `tests/`, `data/`, `.runtime/`; if the Dockerfile needs a new input, check `.dockerignore`
+- Docker build context excludes `*.md`, `lib/`, `tests/`, `data/`, `.runtime/`; if the Dockerfile needs a new input, check `.dockerignore`
 
 ## When stuck
 

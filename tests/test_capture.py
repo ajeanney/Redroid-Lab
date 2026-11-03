@@ -136,6 +136,7 @@ class CaptureTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.addCleanup(self.stop_workers)
         shutil.copy2(REPO / "redroid.sh", self.root)
+        shutil.copytree(REPO / "lib", self.root / "lib")
         shutil.copy2(REPO / "redroid.env", self.root)
         (self.root / "guest.json").write_text(json.dumps({"proxy": "old.proxy:8888"}))
         self.bin = self.root / "bin"
