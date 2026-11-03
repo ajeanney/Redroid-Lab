@@ -55,7 +55,8 @@ if cmd == "apktool":
     assert args[0] == "d" and args[2] == "-o", args
     output = Path(args[3])
     output.mkdir(parents=True)
-    (output / "AndroidManifest.xml").write_text('<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.app"><uses-sdk android:targetSdkVersion="34"/><application><activity android:name=".Public" android:exported="true"/></application></manifest>')
+    sdk = '<uses-sdk android:targetSdkVersion="34"/>' if '--match-original' in args else ''
+    (output / "AndroidManifest.xml").write_text('<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.app">' + sdk + '<application><activity android:name=".Public" android:exported="true"/><provider android:name=".Private"/></application></manifest>')
 elif cmd == "jadx":
     assert args[0] == "-d", args
     output = Path(args[1])
@@ -147,7 +148,9 @@ class PullTests(unittest.TestCase):
         self.run_command("pull", PACKAGE, "--report")
         output, = self.outputs()
         report = json.loads((output / "report.json").read_text())
-        self.assertEqual(report["exported_components"][0]["name"], PACKAGE + ".Public")
+        self.assertEqual(report["target_sdk"], "34")
+        self.assertEqual([c["name"] for c in report["exported_components"]], [PACKAGE + ".Public"])
+        self.assertIn("--match-original", next(e for e in self.events() if e[0] == "apktool"))
         self.assertTrue((output / "base.apk").exists())
         self.assertTrue((output / "apktool/base/AndroidManifest.xml").exists())
 

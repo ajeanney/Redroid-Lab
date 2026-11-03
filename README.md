@@ -274,7 +274,9 @@ is excluded from Git and the Docker build context, including decoded sources
 and resources; exclude custom output locations yourself.
 
 `pull <package> --report` reuses Apktool decoding (no separate Android SDK tool)
-and requires host Python 3.9+. It writes `report.json` next to the APKs, covering
+and requires host Python 3.9+. Report decoding uses `--match-original` to retain SDK metadata and the original
+package name; these analysis outputs may not be rebuildable. It writes
+`report.json` next to the APKs, covering
 exported activities/aliases, services, receivers and providers, their permissions
 and enabled flags, VIEW deep links, requested/defined permissions, debuggable,
 backup and cleartext flags, plus decoded network-security XML variants.

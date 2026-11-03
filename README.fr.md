@@ -282,7 +282,9 @@ Les configurations locales existantes héritent de la valeur par défaut fournie
 comprises ; excluez vous-même les emplacements personnalisés.
 
 `pull <paquet> --report` réutilise le décodage Apktool (sans outil SDK distinct)
-et exige Python hôte 3.9+. Il écrit `report.json` à côté des APK : activités/alias,
+et exige Python hôte 3.9+. Le décodage utilise `--match-original` pour conserver les métadonnées SDK et le
+nom du paquet ; ces résultats d’analyse ne sont pas forcément recompilables.
+Il écrit `report.json` à côté des APK : activités/alias,
 services, receivers et providers exportés, permissions et activation, liens VIEW,
 permissions demandées/définies, indicateurs debuggable, sauvegarde et trafic en
 clair, ainsi que les variantes XML de sécurité réseau décodées. Les valeurs

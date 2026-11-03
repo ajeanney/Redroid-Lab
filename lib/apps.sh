@@ -23,7 +23,7 @@ cmd_install() {
 cmd_pull() {
     local package=${1:-} option use_apktool=0 use_jadx=0 paths path name output apk
     local analysis_failed=0 use_report=0 decode_failed=0
-    local remote_paths=() apks=() decoded=()
+    local remote_paths=() apks=() decoded=() decode_args=()
     local -A names=()
     [[ $# -gt 0 ]] || die "usage: $0 pull <package> [--apktool] [--jadx] [--report]"
     shift
@@ -70,11 +70,13 @@ cmd_pull() {
     note "Pulled ${#apks[@]} APK(s) to $output"
     # Analysis only uses host files and must not block Android lifecycle commands.
     exec 9>&-
+    # Normal Apktool decoding removes uses-sdk and can rename the package.
+    [[ $use_report == 0 ]] || decode_args+=(--match-original)
     if [[ $use_apktool == 1 ]]; then
         for apk in "${apks[@]}"; do
             name=${apk##*/}
             decoded+=("$output/apktool/${name%.apk}")
-            if ! apktool d "$apk" -o "$output/apktool/${name%.apk}"; then
+            if ! apktool d "$apk" -o "$output/apktool/${name%.apk}" "${decode_args[@]}"; then
                 warn "apktool failed for $name"
                 analysis_failed=1
                 decode_failed=1
