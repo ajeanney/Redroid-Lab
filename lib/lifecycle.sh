@@ -338,7 +338,8 @@ cmd_screen() {
     need adb scrcpy
     adb connect "$ADB_SERIAL" >/dev/null
     android_booted || die "Android is not booted"
-    if scrcpy --help 2>&1 | grep -q -- '--audio-codec'; then
+    # Consume all help output so pipefail does not mistake SIGPIPE for missing audio support.
+    if scrcpy --help 2>&1 | grep -- '--audio-codec' >/dev/null; then
         scrcpy_args+=(
             --audio-codec=aac
             --audio-encoder=OMX.google.aac.encoder

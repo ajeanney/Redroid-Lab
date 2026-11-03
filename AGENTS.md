@@ -47,6 +47,7 @@ Never:
 | `tests/arm64-smoke-app/` | Source of the ARM64-only JNI smoke APK installed and removed by `start` |
 | `tests/test_adb_guard.py` | Real nftables ADB guard in an unprivileged user+network namespace: blocks a LAN neighbour before Docker-style DNAT, keeps loopback, removes only its own table (skips without user namespaces) |
 | `tests/test_capture.py` | Isolated explicit/raw/transparent capture lifecycle and rollback tests with fake host tools |
+| `tests/test_screen.py` | Screen capability detection and AAC selection with fake ADB and scrcpy |
 | `tests/test_pull.py` | Isolated extraction, optional analysis and failure tests with fake ADB, apktool and jadx commands |
 | `tests/test_snapshot.py` | Isolated snapshot round-trip and failure tests with fake Docker, sudo and ADB commands |
 
@@ -62,6 +63,7 @@ shellcheck redroid.sh lib/*.sh   # also: shellcheck build/<file>.sh
 git diff --check
 python3 tests/test_adb_guard.py  # real nft inside `unshare -rn`; host firewall untouched
 python3 tests/test_capture.py    # fake namespaces/firewall/processes; no root or network
+python3 tests/test_screen.py     # fake ADB/scrcpy; long help output and legacy audio compatibility
 node tests/test_frida_scripts.js # mocked Frida APIs, no guest or network
 python3 tests/test_identity.py   # startup property argument generation with host mutations mocked
 python3 tests/test_frida.py      # Frida script dispatch and package validation

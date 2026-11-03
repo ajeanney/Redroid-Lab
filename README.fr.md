@@ -642,7 +642,8 @@ recommencer la récupération. Les diagnostics Bluetooth incluent
 `.runtime/` quand Android en produit un.
 
 Sur les versions récentes de scrcpy, `screen` choisit l'encodeur AAC disponible
-d'Android ; l'encodeur Opus par défaut est absent de cette image redroid. Ubuntu
+d'Android ; l'encodeur Opus par défaut est absent de cette image redroid et provoque
+`Could not create default audio encoder for opus` s'il est sélectionné. Ubuntu
 22.04 et 24.04 empaquettent actuellement des versions plus anciennes de scrcpy,
 sans transfert audio. Le script détecte cette capacité et lance le miroir
 vidéo/entrée sans audio au lieu de passer des options non supportées.

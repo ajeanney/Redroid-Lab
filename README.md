@@ -620,7 +620,8 @@ Bluetooth diagnostics include `dumpsys bluetooth_manager`, filtered logcat, and
 an HCI snoop file under `.runtime/` when Android produces one.
 
 On modern scrcpy releases, `screen` selects Android's available AAC encoder;
-the default Opus encoder is absent from this redroid image. Ubuntu 22.04 and
+the default Opus encoder is absent from this redroid image and causes
+`Could not create default audio encoder for opus` if selected. Ubuntu 22.04 and
 24.04 currently package older scrcpy versions without audio forwarding. The
 script detects that capability and starts video/input mirroring without audio
 instead of passing unsupported options.
