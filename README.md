@@ -15,7 +15,7 @@ inspection, and similar reverse-engineering workflows.
 | Physical Bluetooth passthrough (AOSP Linux-HCI HAL) | Available |
 | Optional Bluetooth: run without it via `start --no-bt` | Available |
 | Network packet capture (pcap + decoded HTTPS) and APK install | Available |
-| Root-based app investigation tooling | Planned |
+| Root-based app investigation: Frida hooking and SSL-pinning bypass | Available |
 
 "Planned" rows are goals; none is implemented yet.
 
@@ -80,6 +80,7 @@ same time.
 - DRM render node at `/dev/dri/renderD128` (Intel is the reference; `setup` only warns on other vendors, and an AMD GPU boots in host mode; if yours does not, set `REDROID_GPU_MODE=guest` in a local config)
 - for Bluetooth passthrough only: a controller exposed as `hciN` (any vendor; `btusb` for the reset fallback)
 - for capture: `tcpdump`, `mitmproxy`, Wireshark's `editcap` and `nsenter`; `setup` installs them on Arch, Debian and Ubuntu, and `capture start` needs `sudo` for tcpdump
+- for Frida: `curl` and `xz` (installed by `setup`); `frida unpin`/`exec` use `uv`'s `uvx` to run the matching host client unless one matching the pinned version is already installed
 - approximately 10 GB of free space for images, build inputs, and cache
 - outbound HTTPS access during the initial build
 
@@ -171,6 +172,9 @@ and restores the host's previous BlueZ and adapter power state.
 | `./redroid.sh launch <package>` | Start an installed app headlessly (then watch it with `screen`) |
 | `./redroid.sh capture start [--no-mitm]` | Record all container traffic to `captures/<UTC timestamp>/` |
 | `./redroid.sh capture stop` / `status` | End the session and write the artifacts / show the active session |
+| `./redroid.sh frida start` / `stop` | Push and run `frida-server` as root in the guest, forwarded to the host loopback / stop it |
+| `./redroid.sh frida unpin <package>` | Spawn an app with Java-layer SSL-pinning bypassed, so `capture` can decode its HTTPS |
+| `./redroid.sh frida exec <tool> [args]` | Run any Frida CLI tool (`frida`, `frida-ps`, `frida-trace`, ...) against the guest |
 
 Lifecycle operations use a lock and a private state file. Repeated `stop` calls
 are safe, and interrupted startup is recovered on the next lifecycle command.
@@ -183,6 +187,7 @@ Defaults are in `redroid.env`:
 - container name and loopback ADB port
 - Bluetooth adapter, expected USB ID, and `BT_ENABLE` (default `1`)
 - capture directory (`CAPTURE_DIR`) and preferred mitmproxy port (`MITM_PORT`)
+- host-forwarded Frida port (`FRIDA_PORT`, loopback only)
 - persistent data directory
 - display resolution, density, and frame rate
 - GPU and native-bridge settings
@@ -235,6 +240,31 @@ CA is copied again at each `capture start`, and the proxy setting is cleared at
 `tcpdump` runs as root through `sudo` and then drops privileges to the invoking
 user, so artifacts are user-owned. Captures contain decrypted credentials and
 personal data: keep `captures/` private.
+
+## Root-based app investigation (Frida)
+
+```sh
+./redroid.sh start --no-bt
+./redroid.sh install ./some-app.apk
+./redroid.sh frida start
+./redroid.sh capture start
+./redroid.sh frida unpin com.example.app   # blocks; stays attached while you drive the app
+# ... in another terminal: ./redroid.sh screen ...
+# Ctrl-C the unpin command once done, then:
+./redroid.sh capture stop
+./redroid.sh frida stop
+```
+
+`frida start` downloads the pinned `frida-server` release (checked against
+`build-inputs.env`), pushes it to `/data/local/tmp`, and runs it as root in the
+guest; the server port is forwarded to the host loopback only. `frida unpin`
+spawns an app with [frida/unpin.js](frida/unpin.js) loaded, which patches the
+platform `TrustManager`, `SSLContext`, network-security-config pin checks, and
+OkHttp's `CertificatePinner` so the mitmproxy CA (installed by `capture start`)
+is accepted — this closes the "apps that pin certificates" gap from the
+packet-capture section above, for apps that pin in Java. The hooks apply only
+while the command stays attached; `frida exec` runs any other Frida CLI tool
+(e.g. `frida-trace`) the same way.
 
 ## ARM application support
 

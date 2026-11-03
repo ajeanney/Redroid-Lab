@@ -16,7 +16,7 @@ similaires.
 | Bluetooth physique en passthrough (HAL Linux-HCI d'AOSP) | Disponible |
 | Bluetooth optionnel : démarrage sans lui avec `start --no-bt` | Disponible |
 | Capture de paquets réseau (pcap + HTTPS décodé) et installation d'APK | Disponible |
-| Outillage d'investigation d'applications avec root | Prévu |
+| Investigation d'applications avec root : hooking Frida et contournement du SSL pinning | Disponible |
 
 Les lignes « Prévu » sont des objectifs ; aucune n'est encore implémentée.
 
@@ -83,6 +83,7 @@ Android ne peuvent pas le posséder en même temps.
 - nœud de rendu DRM sur `/dev/dri/renderD128` (Intel est la référence ; `setup` ne fait que prévenir pour les autres fabricants, et un GPU AMD démarre en mode hôte ; sinon, mettez `REDROID_GPU_MODE=guest` dans une configuration locale)
 - pour le passthrough Bluetooth uniquement : un contrôleur exposé en `hciN` (tout fabricant ; `btusb` pour la réinitialisation de secours)
 - pour la capture : `tcpdump`, `mitmproxy`, `editcap` de Wireshark et `nsenter` ; `setup` les installe sur Arch, Debian et Ubuntu, et `capture start` a besoin de `sudo` pour tcpdump
+- pour Frida : `curl` et `xz` (installés par `setup`) ; `frida unpin`/`exec` utilisent `uvx` d'`uv` pour lancer le client hôte correspondant, sauf si une version déjà installée correspond à la version épinglée
 - environ 10 Go d'espace libre pour les images, les entrées de compilation et le cache
 - un accès HTTPS sortant pendant la compilation initiale
 
@@ -176,6 +177,9 @@ l'alimentation de l'adaptateur.
 | `./redroid.sh launch <paquet>` | Lance une application installée sans interface (à suivre avec `screen`) |
 | `./redroid.sh capture start [--no-mitm]` | Enregistre tout le trafic du conteneur dans `captures/<horodatage UTC>/` |
 | `./redroid.sh capture stop` / `status` | Termine la session et écrit les artefacts / affiche la session active |
+| `./redroid.sh frida start` / `stop` | Pousse et lance `frida-server` en root dans l'invité, redirigé vers la loopback de l'hôte / l'arrête |
+| `./redroid.sh frida unpin <paquet>` | Lance une application avec le SSL pinning Java contourné, pour que `capture` puisse décoder son HTTPS |
+| `./redroid.sh frida exec <outil> [args]` | Exécute n'importe quel outil Frida (`frida`, `frida-ps`, `frida-trace`, ...) contre l'invité |
 
 Les opérations de cycle de vie utilisent un verrou et un fichier d'état privé.
 Des `stop` répétés sont sans danger, et un démarrage interrompu est récupéré à la
@@ -189,6 +193,7 @@ Les valeurs par défaut sont dans `redroid.env` :
 - nom du conteneur et port ADB de la loopback
 - adaptateur Bluetooth, identifiant USB attendu et `BT_ENABLE` (`1` par défaut)
 - dossier de capture (`CAPTURE_DIR`) et port mitmproxy préféré (`MITM_PORT`)
+- port Frida redirigé vers l'hôte (`FRIDA_PORT`, loopback uniquement)
 - dossier des données persistantes
 - résolution d'affichage, densité et fréquence d'images
 - réglages du GPU et du native-bridge
@@ -243,6 +248,33 @@ le réglage du proxy est effacé à `capture stop` (fait aussi par `stop`).
 l'utilisateur appelant : les artefacts lui appartiennent. Les captures
 contiennent des identifiants et des données personnelles déchiffrés : gardez
 `captures/` privé.
+
+## Investigation d'applications avec root (Frida)
+
+```sh
+./redroid.sh start --no-bt
+./redroid.sh install ./une-appli.apk
+./redroid.sh frida start
+./redroid.sh capture start
+./redroid.sh frida unpin com.exemple.appli   # bloquant ; reste attaché pendant l'utilisation de l'appli
+# ... dans un autre terminal : ./redroid.sh screen ...
+# Ctrl-C la commande unpin une fois terminé, puis :
+./redroid.sh capture stop
+./redroid.sh frida stop
+```
+
+`frida start` télécharge la version épinglée de `frida-server` (vérifiée contre
+`build-inputs.env`), la pousse dans `/data/local/tmp` et la lance en root dans
+l'invité ; le port du serveur n'est redirigé que vers la loopback de l'hôte.
+`frida unpin` lance une application avec [frida/unpin.js](frida/unpin.js)
+chargé, qui modifie le `TrustManager` de la plateforme, `SSLContext`, les
+vérifications de pinning de la network-security-config et le
+`CertificatePinner` d'OkHttp pour que le certificat CA de mitmproxy (installé
+par `capture start`) soit accepté — cela referme la limite « applications qui
+épinglent leurs certificats » mentionnée dans la section de capture
+ci-dessus, pour les applications qui épinglent en Java. Les hooks ne
+s'appliquent que tant que la commande reste attachée ; `frida exec` exécute
+n'importe quel autre outil Frida (par ex. `frida-trace`) de la même façon.
 
 ## Support des applications ARM
 

@@ -1,6 +1,6 @@
 # Redroid-Lab
 
-Toolbox around a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host. Today it provides optional physical Bluetooth passthrough (AOSP Linux-HCI HAL), GPU acceleration, scrcpy, ARM64 translation, APK install and packet capture (tcpdump + mitmproxy). Planned (not implemented): root-based app investigation. Human docs: [README.md](README.md), [README.fr.md](README.fr.md).
+Toolbox around a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host. Today it provides optional physical Bluetooth passthrough (AOSP Linux-HCI HAL), GPU acceleration, scrcpy, ARM64 translation, APK install, packet capture (tcpdump + mitmproxy) and root-based app investigation (Frida, SSL-pinning bypass). Human docs: [README.md](README.md), [README.fr.md](README.fr.md).
 
 ## Local instructions (read first)
 
@@ -8,7 +8,7 @@ If `AGENTS.local.md` (or any `*.local.md` at the repo root) exists, read it befo
 
 ## Safety first (host-impacting project)
 
-`./redroid.sh start` stops and runtime-masks BlueZ, powers down `hci0`, starts a **privileged** container, and installs an nftables guard. `stop` reverses this. `start --no-bt` (or `BT_ENABLE=0`) skips every Bluetooth step and the host-netns mount; the state file records `BT_MANAGED` so `stop` only restores what was taken. `capture start` runs `tcpdump` through `sudo`+`nsenter`, runs `mitmdump` on the Docker gateway, writes the mitmproxy CA into the guest and sets its global `http_proxy`; `capture stop` (also run by `stop`) undoes all of it. Treat these as host-changing operations.
+`./redroid.sh start` stops and runtime-masks BlueZ, powers down `hci0`, starts a **privileged** container, and installs an nftables guard. `stop` reverses this. `start --no-bt` (or `BT_ENABLE=0`) skips every Bluetooth step and the host-netns mount; the state file records `BT_MANAGED` so `stop` only restores what was taken. `capture start` runs `tcpdump` through `sudo`+`nsenter`, runs `mitmdump` on the Docker gateway, writes the mitmproxy CA into the guest and sets its global `http_proxy`; `capture stop` (also run by `stop`) undoes all of it. `frida start` pushes and runs `frida-server` as **root in the guest** and forwards its port to the host loopback; `frida unpin` spawns an app with its SSL-pinning checks patched out so `capture` can decode it. Treat these as host-changing operations.
 
 Allowed without asking:
 - Read any file; `git status`, `git diff`, `git log`
@@ -16,7 +16,7 @@ Allowed without asking:
 - `./redroid.sh status` (read-only)
 
 Ask first:
-- `./redroid.sh setup | start | stop | screen | logs | install | launch | capture` (installs packages, builds images, takes over Bluetooth, writes `.runtime/` and `captures/`)
+- `./redroid.sh setup | start | stop | screen | logs | install | launch | capture | frida` (installs packages, builds images, takes over Bluetooth, writes `.runtime/`, `captures/` and `.cache/frida/`)
 - Any `docker`, `systemctl`, `bluetoothctl`, `btmgmt`, `nft`, `modprobe` or `sudo` command
 - `git commit`, `git push`, deleting files, adding dependencies or changing pinned digests/checksums
 
@@ -30,11 +30,13 @@ Never:
 
 | Path | Purpose |
 | --- | --- |
-| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `launch`, `capture`. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
-| `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, capture dir/port, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
+| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `launch`, `capture`, `frida`. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
+| `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, capture dir/port, Frida port, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
 | `captures/` | Gitignored capture sessions (`full.pcap`, `flows.mitm`, `sslkeylog.txt`, `full-decrypted.pcapng`) |
+| `frida/unpin.js` | Java-layer SSL-pinning bypass loaded by `frida unpin` |
+| `.cache/frida/` | Gitignored: downloaded, checksummed `frida-server` binaries |
 | `Dockerfile` | Overlay on the pinned redroid image; builds and installs the Bluetooth HAL |
-| `build-inputs.env` | Pinned source URLs and SHA-256 sums for the HAL build |
+| `build-inputs.env` | Pinned source URLs and SHA-256 sums for the HAL build, plus the pinned Frida version/checksum |
 | `build/` | `build-bt-hal.sh` (also patches the HAL to read the HCI index from `ro.redroid.bt.hci`), `validate-runtime.sh`, `btlinux-service.cc`, the HAL `.rc`, `build-arm64-smoke-apk.sh` |
 | `tests/arm64-smoke-app/` | Source of the ARM64-only JNI smoke APK installed and removed by `start` |
 

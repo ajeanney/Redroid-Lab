@@ -30,7 +30,7 @@ load_config() {
     for name in BASE_IMAGE LOCAL_IMAGE CONTAINER_NAME ADB_HOST ADB_PORT \
         BT_ADAPTER NFT_TABLE REDROID_DATA_DIR REDROID_WIDTH REDROID_HEIGHT \
         REDROID_DPI REDROID_FPS REDROID_GPU_MODE REDROID_NATIVE_BRIDGE \
-        HOST_NETNS_SOURCE BOOT_TIMEOUT BT_ENABLE CAPTURE_DIR MITM_PORT; do
+        HOST_NETNS_SOURCE BOOT_TIMEOUT BT_ENABLE CAPTURE_DIR MITM_PORT FRIDA_PORT; do
         [[ -n ${!name:-} ]] || die "missing configuration value '$name'"
     done
     if [[ ! $ADB_PORT =~ ^[0-9]+$ ]] || (( ADB_PORT < 1 || ADB_PORT > 65535 )); then
@@ -40,6 +40,9 @@ load_config() {
     [[ $BT_ENABLE == [01] ]] || die "BT_ENABLE must be 0 or 1"
     if [[ ! $MITM_PORT =~ ^[0-9]+$ ]] || (( MITM_PORT < 1 || MITM_PORT > 65535 )); then
         die "MITM_PORT must be between 1 and 65535"
+    fi
+    if [[ ! $FRIDA_PORT =~ ^[0-9]+$ ]] || (( FRIDA_PORT < 1 || FRIDA_PORT > 65535 )); then
+        die "FRIDA_PORT must be between 1 and 65535"
     fi
     [[ $HOST_NETNS_SOURCE == /* ]] || die "HOST_NETNS_SOURCE must be an absolute path"
     [[ $NFT_TABLE =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || \
@@ -196,6 +199,8 @@ install_host_dependencies() {
             command -v mitmdump >/dev/null 2>&1 || missing+=(mitmproxy)
             command -v editcap >/dev/null 2>&1 || missing+=(wireshark-cli)
             command -v nsenter >/dev/null 2>&1 || missing+=(util-linux)
+            command -v curl >/dev/null 2>&1 || missing+=(curl)
+            command -v xz >/dev/null 2>&1 || missing+=(xz)
             ;;
         debian|ubuntu)
             command -v docker >/dev/null 2>&1 || missing+=(docker.io)
@@ -213,9 +218,11 @@ install_host_dependencies() {
             command -v mitmdump >/dev/null 2>&1 || missing+=(mitmproxy)
             command -v editcap >/dev/null 2>&1 || missing+=(wireshark-common)
             command -v nsenter >/dev/null 2>&1 || missing+=(util-linux)
+            command -v curl >/dev/null 2>&1 || missing+=(curl)
+            command -v xz >/dev/null 2>&1 || missing+=(xz-utils)
             ;;
         *)
-            die "unsupported distribution; install Docker, ADB, scrcpy, nftables, BlueZ tools, iproute2, util-linux, rfkill, kmod, tcpdump, mitmproxy, and Wireshark's editcap manually"
+            die "unsupported distribution; install Docker, ADB, scrcpy, nftables, BlueZ tools, iproute2, util-linux, rfkill, kmod, tcpdump, mitmproxy, Wireshark's editcap, curl, and xz manually"
             ;;
     esac
     if (( ${#missing[@]} )); then
@@ -709,6 +716,7 @@ cmd_stop() {
     [[ $bt_managed == 0 ]] || require_bt_tools
     capture_stop_active
     note "Stopping redroid"
+    frida_forget
     stop_container
     restore_host_state
     [[ $bt_managed == 0 ]] || stop_check_bluetooth
@@ -767,6 +775,7 @@ cmd_status() {
     if adb -s "$ADB_SERIAL" get-state >/dev/null 2>&1; then
         echo "android:   boot_completed=$(adb_shell getprop sys.boot_completed | tr -d '\r')"
         echo "abis:      $(adb_shell getprop ro.product.cpu.abilist | tr -d '\r')"
+        frida_running && echo "frida:     running on 127.0.0.1:$FRIDA_PORT" || echo "frida:     stopped"
         if bt_managed_in_state; then
             if grep -q 'HCI device ready' <<<"$(adb_shell logcat -d -v brief 2>/dev/null || true)"; then
                 echo "btlinux:   HCI device ready"
@@ -985,9 +994,118 @@ cmd_launch() {
     adb_shell am start -n "$activity"
 }
 
+FRIDA_DIR=$SCRIPT_DIR/.cache/frida
+FRIDA_GUEST_BIN=/data/local/tmp/frida-server
+
+load_frida_inputs() {
+    local name
+    # shellcheck disable=SC1090
+    source "$INPUTS_FILE"
+    for name in FRIDA_VERSION FRIDA_TOOLS_VERSION FRIDA_SERVER_SHA256; do
+        [[ -n ${!name:-} ]] || die "missing '$name' in $INPUTS_FILE"
+    done
+}
+
+frida_running() {
+    [[ -n $(adb_shell su 0 pidof frida-server 2>/dev/null | tr -d '\r') ]]
+}
+
+# Drop the host-side adb forward; harmless when it was never set up.
+frida_forget() {
+    timeout 10 adb forward --remove "tcp:$FRIDA_PORT" >/dev/null 2>&1 || true
+}
+
+# Run a Frida CLI tool against the guest server. A host install is used when its
+# version matches the pinned server; otherwise the pinned release runs through uvx.
+frida_host() {
+    local tool=$1
+    shift
+    load_frida_inputs
+    if command -v frida >/dev/null 2>&1 && [[ $(frida --version) == "$FRIDA_VERSION" ]]; then
+        "$tool" -H "127.0.0.1:$FRIDA_PORT" "$@"
+    else
+        need uvx
+        uvx --from "frida-tools==$FRIDA_TOOLS_VERSION" --with "frida==$FRIDA_VERSION" \
+            "$tool" -H "127.0.0.1:$FRIDA_PORT" "$@"
+    fi
+}
+
+frida_start() {
+    local archive bin attempts=0
+    need curl
+    need xz
+    need sha256sum
+    container_running || die "container '$CONTAINER_NAME' is not running; run './redroid.sh start'"
+    load_frida_inputs
+    archive=$FRIDA_DIR/frida-server-$FRIDA_VERSION-android-x86_64.xz
+    bin=$FRIDA_DIR/frida-server-$FRIDA_VERSION
+    mkdir -p "$FRIDA_DIR"
+    if [[ ! -x $bin ]]; then
+        if [[ ! -f $archive ]]; then
+            note "Downloading frida-server $FRIDA_VERSION"
+            curl -fsSL -o "$archive" \
+                "https://github.com/frida/frida/releases/download/$FRIDA_VERSION/frida-server-$FRIDA_VERSION-android-x86_64.xz"
+        fi
+        echo "$FRIDA_SERVER_SHA256  $archive" | sha256sum -c --quiet - || \
+            { rm -f "$archive"; die "frida-server checksum mismatch"; }
+        xz -dc "$archive" >"$bin.tmp"
+        chmod 755 "$bin.tmp"
+        mv "$bin.tmp" "$bin"
+    fi
+
+    adb connect "$ADB_SERIAL" >/dev/null 2>&1 || true
+    if frida_running; then
+        note "frida-server is already running"
+    else
+        note "Starting frida-server as root in the guest"
+        adb -s "$ADB_SERIAL" push "$bin" "$FRIDA_GUEST_BIN" >/dev/null
+        adb_shell su 0 sh -c "'chmod 755 $FRIDA_GUEST_BIN; setsid $FRIDA_GUEST_BIN -l 127.0.0.1:$FRIDA_PORT </dev/null >/dev/null 2>&1 &'"
+        until frida_running; do
+            (( ++attempts < 10 )) || die "frida-server did not start in the guest"
+            sleep 1
+        done
+    fi
+    adb -s "$ADB_SERIAL" forward "tcp:$FRIDA_PORT" "tcp:$FRIDA_PORT" >/dev/null
+    note "frida-server ready on 127.0.0.1:$FRIDA_PORT (try: $0 frida exec frida-ps -a)"
+}
+
+frida_stop() {
+    frida_forget
+    container_running || return 0
+    adb connect "$ADB_SERIAL" >/dev/null 2>&1 || true
+    adb_shell su 0 sh -c "'kill \$(pidof frida-server)'" >/dev/null 2>&1 || true
+    note "frida-server stopped"
+}
+
+cmd_frida() {
+    local action=${1:-}
+    [[ $# -eq 0 ]] || shift
+    case $action in
+        start) acquire_lock; need adb; frida_start ;;
+        stop) acquire_lock; need adb; frida_stop ;;
+        unpin)
+            [[ -n ${1:-} ]] || die "usage: $0 frida unpin <package>"
+            need adb
+            adb connect "$ADB_SERIAL" >/dev/null 2>&1 || true
+            frida_running || die "frida-server is not running; run '$0 frida start'"
+            # The hooks live only while this client stays attached; exit the REPL to detach.
+            frida_host frida -f "$1" -l "$SCRIPT_DIR/frida/unpin.js"
+            ;;
+        exec)
+            [[ $# -ge 1 ]] || die "usage: $0 frida exec <frida|frida-ps|frida-trace|...> [args]"
+            [[ $1 == frida || $1 == frida-* ]] || die "'$1' is not a Frida tool"
+            need adb
+            adb connect "$ADB_SERIAL" >/dev/null 2>&1 || true
+            frida_running || die "frida-server is not running; run '$0 frida start'"
+            frida_host "$@"
+            ;;
+        *) die "usage: $0 frida {start|stop|unpin <package>|exec <tool> [args]}" ;;
+    esac
+}
+
 usage() {
     cat <<'EOF'
-Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|launch|capture}
+Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|launch|capture|frida}
 
   setup    Install missing Arch/Debian/Ubuntu tools and build the image
   start    Boot redroid; give hci0 to Android unless --no-bt (or BT_ENABLE=0)
@@ -998,6 +1116,7 @@ Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|launch|capture}
   install  Install an APK, several split APKs, or a directory of splits
   launch   Start an installed app by package name
   capture  capture start [--no-mitm] | stop | status: pcap + decoded HTTPS
+  frida    frida start | stop | unpin <package> | exec <tool> [args]: root hooking
 EOF
 }
 
@@ -1012,5 +1131,6 @@ case ${1:-} in
     install) shift; cmd_install "$@" ;;
     launch) shift; cmd_launch "$@" ;;
     capture) shift; cmd_capture "$@" ;;
+    frida) shift; cmd_frida "$@" ;;
     *) usage; exit 2 ;;
 esac

@@ -12,6 +12,7 @@ data
 .cache
 captures
 tests
+frida
 
 # Local configuration and generated artifacts are not image inputs
 redroid.local.env
