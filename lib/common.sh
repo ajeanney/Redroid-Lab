@@ -49,8 +49,10 @@ load_config() {
     # shellcheck disable=SC1090
     source "$CONFIG_FILE"
     local name default
+    local identity_names=(REDROID_MODEL REDROID_MANUFACTURER REDROID_BRAND
+        REDROID_DEVICE REDROID_PRODUCT REDROID_FINGERPRINT REDROID_QEMU)
     # Existing local configurations inherit defaults for newly added settings.
-    for name in SNAPSHOT_DIR PULL_DIR APPDATA_DIR CAPTURE_NFT_TABLE MITM_GID; do
+    for name in SNAPSHOT_DIR PULL_DIR APPDATA_DIR CAPTURE_NFT_TABLE MITM_GID "${identity_names[@]}"; do
         if [[ ! -v $name ]]; then
             # shellcheck source=/dev/null
             default=$(source "$SCRIPT_DIR/redroid.env"; printf '%s' "${!name}")
@@ -76,6 +78,11 @@ load_config() {
     if [[ ! $MITM_GID =~ ^[1-9][0-9]{9}$ ]] || (( MITM_GID < 1000000000 || MITM_GID > 2147483647 )); then
         die "MITM_GID must be an unused Android group between 1000000000 and 2147483647"
     fi
+    # Identity keys are optional, but must remain single property values.
+    for name in "${identity_names[@]}"; do
+        [[ ${!name} != *$'\n'* && ${!name} != *$'\r'* ]] || die "$name must be a single line"
+    done
+    [[ -z $REDROID_QEMU || $REDROID_QEMU == [01] ]] || die "REDROID_QEMU must be empty, 0 or 1"
     # Relative directories are relative to the toolbox, not the caller's cwd.
     for name in REDROID_DATA_DIR CAPTURE_DIR SNAPSHOT_DIR PULL_DIR APPDATA_DIR; do
         [[ ${!name} == /* ]] || printf -v "$name" '%s' "$SCRIPT_DIR/${!name#./}"

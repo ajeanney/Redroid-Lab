@@ -173,13 +173,15 @@ and restores the host's previous BlueZ and adapter power state.
 | `./redroid.sh status` | Show container, Android, ABI, BlueZ, and btlinux readiness |
 | `./redroid.sh logs` | Print Bluetooth diagnostics and save HCI snoop data when available |
 | `./redroid.sh install <apk\|dir>...` | Install one APK, several split APKs, or a directory of splits (`base.apk` + `split_config.*.apk`) |
-| `./redroid.sh pull <package> [--apktool] [--jadx]` | Extract installed APKs and splits; optionally decode resources/smali or decompile Java sources |
+| `./redroid.sh pull <package> [--apktool] [--jadx] [--report]` | Extract installed APKs and splits; optionally decode resources/smali or decompile Java sources |
 | `./redroid.sh launch <package>` | Start an installed app headlessly (then watch it with `screen`) |
+| `./redroid.sh appdata pull\|diff <package>` | Copy private user-0 files or compare the last two completed pulls |
 | `./redroid.sh snapshot save\|restore <name>` | Save or replace Android data while the container is stopped; restart it if it was running |
-| `./redroid.sh capture start [--no-mitm\|--transparent]` | Record all container traffic to `captures/<UTC timestamp>-<random suffix>/` |
+| `./redroid.sh capture start [--no-mitm\|--transparent] [--app <pkg>] [--logcat] [--record] [--btsnoop]` | Record all container traffic to `captures/<UTC timestamp>-<random suffix>/` |
 | `./redroid.sh capture stop` / `status` | End the session and write the artifacts / show the active session |
 | `./redroid.sh frida start` / `stop` | Push and run `frida-server` as root in the guest, forwarded to the host loopback / stop it |
 | `./redroid.sh frida unpin <package>` | Spawn an app with Java-layer SSL-pinning bypassed, so `capture` can decode its HTTPS |
+| `./redroid.sh frida script <name> <package> [args]` | Run a bundled crypto, conceal, native-unpin or flutter-unpin script |
 | `./redroid.sh frida exec <tool> [args]` | Run any Frida CLI tool (`frida`, `frida-ps`, `frida-trace`, ...) against the guest |
 
 Lifecycle operations use a lock and a private state file. Repeated `stop` calls
@@ -212,6 +214,28 @@ REDROID_CONFIG=./redroid.local.env ./redroid.sh start
 ```
 
 Use the same configuration for every lifecycle command.
+
+Optional identity overrides are empty by default. Set them in your local config:
+
+```sh
+REDROID_MODEL='Lab Phone'
+REDROID_MANUFACTURER='Lab'
+REDROID_BRAND=lab
+REDROID_DEVICE=lab_device
+REDROID_PRODUCT=lab_product
+REDROID_FINGERPRINT='lab/lab_product/lab_device:14/LAB/1:user/release-keys'
+REDROID_QEMU=0
+```
+
+They map to `ro.product.model`, `.manufacturer`, `.brand`, `.device`, `.name`,
+`ro.build.fingerprint` and `ro.kernel.qemu`. Empty values preserve the image
+properties; old local configs inherit empty defaults. Values are passed as
+individual startup arguments, including spaces. Apply changes by stopping and
+starting the container with the same config; an already-running container and
+snapshot restarts retain their original arguments. These are cosmetic property
+overrides supported by [redroid](https://github.com/remote-android/redroid-doc#configuration),
+not hardware/ABI changes or integrity attestation. Apps may inspect additional
+properties or kernel/device signals. Inconsistent profiles may change app behavior.
 
 Android data persists under `data/`. Install applications with
 `./redroid.sh install /path/to/application.apk` (or a directory of split APKs).

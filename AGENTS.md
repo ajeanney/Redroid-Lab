@@ -33,7 +33,7 @@ Never:
 | `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `pull`, `launch`, `snapshot`, `capture`, `frida`, `appdata`. Defines paths, sources `lib/`, dispatches. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
 | `lib/` | Sourced by `redroid.sh`, one area per file: `common.sh` (messages, config, lock, Docker/ADB wrappers), `setup.sh`, `bluetooth.sh` (host takeover/restore), `lifecycle.sh` (`start`/`stop`/`screen`/`status`/`logs`, host state), `capture.sh`, `apps.sh` (`install`/`pull`/`launch`, optional `--report` via `manifest_report.py`), `appdata.sh` (private live copies/diffs via `appdata.py`), `snapshot.sh`, `frida.sh`. Keep each under ~600 lines |
 | `.shellcheckrc` | Lets `shellcheck redroid.sh` follow the sourced `lib/` files |
-| `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, APK/snapshot/capture directories, capture/Frida ports, transparent table/group, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
+| `redroid.env` | Defaults (image, optional identity properties, ports, adapter, `BT_ENABLE`, APK/snapshot/capture directories, capture/Frida ports, transparent table/group, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
 | `apps/` | Gitignored pulls (`<package>/<UTC timestamp>-<random suffix>/`): APKs/splits plus optional `apktool/` and `jadx/` output; set `PULL_DIR` to override |
 | `appdata/` | Gitignored private user-0 app data pulls; `appdata pull <package>` copies live data, `appdata diff <package>` compares the last two completed copies |
 | `snapshots/` | Gitignored named copies of Android data (`<name>/data/`); `snapshot save\|restore <name>` stops the existing container and restarts it only if it was running |
@@ -63,6 +63,7 @@ git diff --check
 python3 tests/test_adb_guard.py  # real nft inside `unshare -rn`; host firewall untouched
 python3 tests/test_capture.py    # fake namespaces/firewall/processes; no root or network
 node tests/test_frida_scripts.js # mocked Frida APIs, no guest or network
+python3 tests/test_identity.py   # startup property argument generation with host mutations mocked
 python3 tests/test_frida.py      # Frida script dispatch and package validation
 python3 tests/test_manifest_report.py # decoded manifest and network security reports
 python3 tests/test_appdata.py    # safe archive extraction and app-data diffs with fake guest commands

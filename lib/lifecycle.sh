@@ -271,7 +271,14 @@ cmd_start() {
 
     # Without the host netns mount the btlinux HAL exits at once, so it can
     # never open (and steal) the host adapter.
-    local netns_mount=()
+    local netns_mount=() identity_properties=()
+    [[ -z $REDROID_MODEL ]] || identity_properties+=("ro.product.model=$REDROID_MODEL")
+    [[ -z $REDROID_MANUFACTURER ]] || identity_properties+=("ro.product.manufacturer=$REDROID_MANUFACTURER")
+    [[ -z $REDROID_BRAND ]] || identity_properties+=("ro.product.brand=$REDROID_BRAND")
+    [[ -z $REDROID_DEVICE ]] || identity_properties+=("ro.product.device=$REDROID_DEVICE")
+    [[ -z $REDROID_PRODUCT ]] || identity_properties+=("ro.product.name=$REDROID_PRODUCT")
+    [[ -z $REDROID_FINGERPRINT ]] || identity_properties+=("ro.build.fingerprint=$REDROID_FINGERPRINT")
+    [[ -z $REDROID_QEMU ]] || identity_properties+=("ro.kernel.qemu=$REDROID_QEMU")
     [[ $BT_ENABLE == 0 ]] || \
         netns_mount=(--mount "type=bind,source=$HOST_NETNS_SOURCE,target=/redroid-host-netns,readonly")
 
@@ -297,7 +304,8 @@ cmd_start() {
         ro.dalvik.vm.isa.arm64=x86_64 \
         ro.enable.native.bridge.exec=1 \
         ro.dalvik.vm.native.bridge="$REDROID_NATIVE_BRIDGE" \
-        ro.redroid.bt.hci="${BT_ADAPTER#hci}" >/dev/null
+        ro.redroid.bt.hci="${BT_ADAPTER#hci}" \
+        "${identity_properties[@]}" >/dev/null
 
     printf 'FIREWALL_RUNTIME_HASH=%q\n' "$(network_hash firewall)" >>"$STATE_FILE"
 

@@ -178,13 +178,15 @@ l'alimentation de l'adaptateur.
 | `./redroid.sh status` | Affiche l'état du conteneur, d'Android, de l'ABI, de BlueZ et de btlinux |
 | `./redroid.sh logs` | Affiche les diagnostics Bluetooth et enregistre les données HCI snoop quand elles existent |
 | `./redroid.sh install <apk\|dossier>...` | Installe un APK, plusieurs APK découpés, ou un dossier de fragments (`base.apk` + `split_config.*.apk`) |
-| `./redroid.sh pull <paquet> [--apktool] [--jadx]` | Extrait les APK installés et leurs fragments ; décode les ressources/smali ou décompile le code Java en option |
+| `./redroid.sh pull <paquet> [--apktool] [--jadx] [--report]` | Extrait les APK installés et leurs fragments ; décode les ressources/smali ou décompile le code Java en option |
 | `./redroid.sh launch <paquet>` | Lance une application installée sans interface (à suivre avec `screen`) |
+| `./redroid.sh appdata pull\|diff <paquet>` | Copier les fichiers privés de l’utilisateur 0 ou comparer les deux dernières copies |
 | `./redroid.sh snapshot save\|restore <nom>` | Sauvegarde ou remplace les données Android conteneur arrêté ; le redémarre s'il tournait auparavant |
-| `./redroid.sh capture start [--no-mitm\|--transparent]` | Enregistre tout le trafic du conteneur dans `captures/<horodatage UTC>-<suffixe aléatoire>/` |
+| `./redroid.sh capture start [--no-mitm\|--transparent] [--app <pkg>] [--logcat] [--record] [--btsnoop]` | Enregistre tout le trafic du conteneur dans `captures/<horodatage UTC>-<suffixe aléatoire>/` |
 | `./redroid.sh capture stop` / `status` | Termine la session et écrit les artefacts / affiche la session active |
 | `./redroid.sh frida start` / `stop` | Pousse et lance `frida-server` en root dans l'invité, redirigé vers la loopback de l'hôte / l'arrête |
 | `./redroid.sh frida unpin <paquet>` | Lance une application avec le SSL pinning Java contourné, pour que `capture` puisse décoder son HTTPS |
+| `./redroid.sh frida script <nom> <paquet> [args]` | Lancer un script crypto, conceal, native-unpin ou flutter-unpin fourni |
 | `./redroid.sh frida exec <outil> [args]` | Exécute n'importe quel outil Frida (`frida`, `frida-ps`, `frida-trace`, ...) contre l'invité |
 
 Les opérations de cycle de vie utilisent un verrou et un fichier d'état privé.
@@ -218,6 +220,29 @@ REDROID_CONFIG=./redroid.local.env ./redroid.sh start
 ```
 
 Utilisez la même configuration pour chaque commande de cycle de vie.
+
+Les surcharges d’identité sont vides par défaut. Dans la configuration locale :
+
+```sh
+REDROID_MODEL='Lab Phone'
+REDROID_MANUFACTURER='Lab'
+REDROID_BRAND=lab
+REDROID_DEVICE=lab_device
+REDROID_PRODUCT=lab_product
+REDROID_FINGERPRINT='lab/lab_product/lab_device:14/LAB/1:user/release-keys'
+REDROID_QEMU=0
+```
+
+Elles correspondent à `ro.product.model`, `.manufacturer`, `.brand`, `.device`,
+`.name`, `ro.build.fingerprint` et `ro.kernel.qemu`. Une valeur vide préserve
+l’image ; les anciennes configurations héritent de valeurs vides. Chaque valeur,
+espaces compris, est passée comme un argument de démarrage distinct. Appliquez
+les changements en arrêtant puis démarrant le conteneur avec la même configuration ;
+un conteneur déjà actif et les redémarrages d’instantanés gardent leurs arguments.
+Ces [propriétés redroid](https://github.com/remote-android/redroid-doc#configuration)
+sont cosmétiques : elles ne changent ni matériel, ni ABI, ni attestation d’intégrité.
+Les applications peuvent inspecter d’autres propriétés ou signaux noyau/matériel.
+Un profil incohérent peut modifier leur comportement.
 
 Les données Android persistent dans `data/`. Installez des applications avec
 `./redroid.sh install /chemin/vers/application.apk` (ou un dossier d'APK découpés).
