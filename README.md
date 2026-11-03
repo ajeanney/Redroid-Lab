@@ -432,7 +432,13 @@ During a capture, the mitmproxy CA is trusted by the Android guest only. Treat t
 trusted code.
 
 ADB is published only on `127.0.0.1`; `ADB_HOST` is rejected if changed to a
-non-loopback address. The script snapshots physical addresses, main routes,
+non-loopback address. While redroid runs, an nftables table (`NFT_TABLE`,
+`redroid_guard` by default) also drops packets for the ADB port that are
+addressed to this host but arrive on a non-loopback interface. It filters in
+`prerouting` before Docker's DNAT, so LAN neighbours cannot reach the loopback
+publish by routing to `127.0.0.1` through the host. `start` refuses to run if a
+table with that name already exists, and `stop` only deletes the table it
+created. The script snapshots physical addresses, main routes,
 policy rules, and nftables state before startup and validates them during boot
 and restoration.
 

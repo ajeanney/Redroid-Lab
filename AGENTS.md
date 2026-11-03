@@ -44,6 +44,7 @@ Never:
 | `build-inputs.env` | Pinned source URLs and SHA-256 sums for the HAL build, plus the pinned Frida version/checksum |
 | `build/` | `build-bt-hal.sh` (also patches the HAL to read the HCI index from `ro.redroid.bt.hci`), `validate-runtime.sh`, `btlinux-service.cc`, the HAL `.rc`, `build-arm64-smoke-apk.sh` |
 | `tests/arm64-smoke-app/` | Source of the ARM64-only JNI smoke APK installed and removed by `start` |
+| `tests/test_adb_guard.py` | Real nftables ADB guard in an unprivileged user+network namespace: blocks a LAN neighbour before Docker-style DNAT, keeps loopback, removes only its own table (skips without user namespaces) |
 | `tests/test_capture.py` | Isolated explicit/raw/transparent capture lifecycle and rollback tests with fake host tools |
 | `tests/test_pull.py` | Isolated extraction, optional analysis and failure tests with fake ADB, apktool and jadx commands |
 | `tests/test_snapshot.py` | Isolated snapshot round-trip and failure tests with fake Docker, sudo and ADB commands |
@@ -58,6 +59,7 @@ File-scoped checks (preferred, no side effects):
 bash -n redroid.sh lib/*.sh
 shellcheck redroid.sh lib/*.sh   # also: shellcheck build/<file>.sh
 git diff --check
+python3 tests/test_adb_guard.py  # real nft inside `unshare -rn`; host firewall untouched
 python3 tests/test_capture.py    # fake namespaces/firewall/processes; no root or network
 python3 tests/test_pull.py       # temporary files and fake ADB/analysis tools
 python3 tests/test_snapshot.py   # temporary data and fake commands; no hardware or sudo

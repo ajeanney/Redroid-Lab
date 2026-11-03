@@ -447,7 +447,13 @@ Pendant une capture, le CA de mitmproxy n'est approuvé que par l'invité Androi
 comme du code de confiance.
 
 ADB n'est publié que sur `127.0.0.1` ; `ADB_HOST` est refusé s'il est changé pour une
-adresse hors loopback. Le script prend des instantanés des adresses physiques,
+adresse hors loopback. Pendant que redroid tourne, une table nftables
+(`NFT_TABLE`, `redroid_guard` par défaut) rejette aussi les paquets vers le port
+ADB adressés à cet hôte mais arrivés par une interface autre que la loopback.
+Elle filtre en `prerouting`, avant le DNAT de Docker, afin que les voisins du
+réseau local ne puissent pas joindre la publication loopback en routant vers
+`127.0.0.1` via l'hôte. `start` refuse de démarrer si une table de ce nom existe
+déjà, et `stop` ne supprime que la table qu'il a créée. Le script prend des instantanés des adresses physiques,
 des routes principales, des règles de politique et de l'état nftables avant le
 démarrage, et les valide pendant le boot et la restauration.
 

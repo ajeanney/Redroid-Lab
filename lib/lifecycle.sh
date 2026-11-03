@@ -17,6 +17,9 @@ preflight() {
     if ss -H -ltn "sport = :$ADB_PORT" | grep -q .; then
         die "TCP port $ADB_PORT is already in use"
     fi
+    # Checked before any host change; a stale guard of ours is removed by `stop`.
+    ! sudo nft list table inet "$NFT_TABLE" >/dev/null 2>&1 || \
+        die "nftables table inet/$NFT_TABLE already exists; run './redroid.sh stop' or change NFT_TABLE"
 }
 
 network_hash() {
@@ -87,19 +90,29 @@ write_state() {
     } >"$STATE_FILE"
 }
 
+ADB_GUARD_COMMENT=redroid-adb-guard
+
+# Drop non-loopback packets for the ADB port addressed to this host, before
+# Docker's DNAT: otherwise a LAN neighbour can reach the 127.0.0.1 publish by
+# sending to 127.0.0.1 via this host. `create` fails atomically if the table exists.
 install_adb_guard() {
-    if sudo nft list table inet "$NFT_TABLE" >/dev/null 2>&1; then
-        die "nftables table inet/$NFT_TABLE already exists"
-    fi
+    note "Restricting ADB port $ADB_PORT to loopback (nftables inet/$NFT_TABLE)"
     sudo nft -f - <<EOF
-add table inet $NFT_TABLE
-add chain inet $NFT_TABLE input { type filter hook input priority -10; policy accept; }
-add rule inet $NFT_TABLE input iifname != "lo" tcp dport $ADB_PORT drop comment "redroid adb loopback only"
+create table inet $NFT_TABLE { comment "$ADB_GUARD_COMMENT"; }
+add chain inet $NFT_TABLE prerouting { type filter hook prerouting priority raw; policy accept; }
+add rule inet $NFT_TABLE prerouting iifname != "lo" fib daddr type local tcp dport $ADB_PORT drop comment "redroid adb loopback only"
 EOF
 }
 
+# Only delete the table install_adb_guard created; another owner's keeps its rules.
 remove_adb_guard() {
-    sudo nft delete table inet "$NFT_TABLE" >/dev/null 2>&1 || true
+    local rules
+    rules=$(sudo nft list table inet "$NFT_TABLE" 2>/dev/null) || return 0
+    if ! grep -Fq "comment \"$ADB_GUARD_COMMENT\"" <<<"$rules"; then
+        warn "nftables table inet/$NFT_TABLE is not redroid's ADB guard; leaving it"
+        return 0
+    fi
+    sudo nft delete table inet "$NFT_TABLE" || warn "could not remove nftables table inet/$NFT_TABLE"
 }
 
 restore_host_state() {
@@ -252,6 +265,7 @@ cmd_start() {
     write_state
 
     trap_exit rollback_start
+    install_adb_guard
     [[ $BT_ENABLE == 0 ]] || bt_reserve_adapter
     mkdir -p "$REDROID_DATA_DIR"
 
