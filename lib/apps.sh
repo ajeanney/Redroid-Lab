@@ -22,22 +22,24 @@ cmd_install() {
 
 cmd_pull() {
     local package=${1:-} option use_apktool=0 use_jadx=0 paths path name output apk
-    local analysis_failed=0
-    local remote_paths=() apks=()
+    local analysis_failed=0 use_report=0 decode_failed=0
+    local remote_paths=() apks=() decoded=()
     local -A names=()
-    [[ $# -gt 0 ]] || die "usage: $0 pull <package> [--apktool] [--jadx]"
+    [[ $# -gt 0 ]] || die "usage: $0 pull <package> [--apktool] [--jadx] [--report]"
     shift
     validate_package "$package"
     for option; do
         case $option in
             --apktool) use_apktool=1 ;;
             --jadx) use_jadx=1 ;;
-            *) die "usage: $0 pull <package> [--apktool] [--jadx]" ;;
+            --report) use_report=1; use_apktool=1 ;;
+            *) die "usage: $0 pull <package> [--apktool] [--jadx] [--report]" ;;
         esac
     done
     need adb flock
     [[ $use_apktool == 0 ]] || need apktool
     [[ $use_jadx == 0 ]] || need jadx
+    [[ $use_report == 0 ]] || need python3
     acquire_lock
     adb connect "$ADB_SERIAL" >/dev/null || die "cannot connect to Android at $ADB_SERIAL"
     paths=$(adb_shell pm path "$package" | tr -d '\r') || \
@@ -71,9 +73,11 @@ cmd_pull() {
     if [[ $use_apktool == 1 ]]; then
         for apk in "${apks[@]}"; do
             name=${apk##*/}
+            decoded+=("$output/apktool/${name%.apk}")
             if ! apktool d "$apk" -o "$output/apktool/${name%.apk}"; then
                 warn "apktool failed for $name"
                 analysis_failed=1
+                decode_failed=1
             fi
         done
     fi
@@ -81,6 +85,14 @@ cmd_pull() {
         if ! jadx -d "$output/jadx" "${apks[@]}"; then
             warn "jadx failed"
             analysis_failed=1
+        fi
+    fi
+    if [[ $use_report == 1 ]]; then
+        if [[ $decode_failed == 1 ]] || ! python3 "$SCRIPT_DIR/lib/manifest_report.py" "$output/report.json" "${decoded[@]}"; then
+            warn "manifest report failed"
+            analysis_failed=1
+        else
+            note "Attack surface report: $output/report.json"
         fi
     fi
     [[ $analysis_failed == 0 ]] || die "static analysis failed; APKs and analysis output retained at $output"

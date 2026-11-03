@@ -55,7 +55,7 @@ if cmd == "apktool":
     assert args[0] == "d" and args[2] == "-o", args
     output = Path(args[3])
     output.mkdir(parents=True)
-    (output / "AndroidManifest.xml").write_text("decoded")
+    (output / "AndroidManifest.xml").write_text('<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.app"><uses-sdk android:targetSdkVersion="34"/><application><activity android:name=".Public" android:exported="true"/></application></manifest>')
 elif cmd == "jadx":
     assert args[0] == "-d", args
     output = Path(args[1])
@@ -77,7 +77,7 @@ class PullTests(unittest.TestCase):
         shutil.copy2(REPO / "redroid.env", self.root)
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for name in ("bash", "dirname", "mkdir", "flock", "tr", "date", "mktemp", "mv"):
+        for name in ("bash", "dirname", "mkdir", "flock", "tr", "date", "mktemp", "mv", "python3"):
             (self.bin / name).symlink_to(shutil.which(name))
         for name in ("adb", "apktool", "jadx"):
             command = self.bin / name
@@ -142,6 +142,20 @@ class PullTests(unittest.TestCase):
                     call = self.events()[-1]
                     self.assertEqual(call[:3], ["jadx", "-d", str(output / "jadx")])
                     self.assertEqual(call[3:], [str(output / "base.apk"), str(output / "split_config.en.apk")])
+
+    def test_report_uses_decoded_xml_and_keeps_apks(self):
+        self.run_command("pull", PACKAGE, "--report")
+        output, = self.outputs()
+        report = json.loads((output / "report.json").read_text())
+        self.assertEqual(report["exported_components"][0]["name"], PACKAGE + ".Public")
+        self.assertTrue((output / "base.apk").exists())
+        self.assertTrue((output / "apktool/base/AndroidManifest.xml").exists())
+
+    def test_report_failure_is_nonzero_and_other_analysis_still_runs(self):
+        self.run_command("pull", PACKAGE, "--report", "--jadx", fault="apktool", ok=False)
+        output, = self.outputs()
+        self.assertTrue((output / "jadx/App.java").exists())
+        self.assertTrue((output / "base.apk").exists())
 
     def test_invalid_args_do_not_contact_guest(self):
         for args in ((), ("../escape",), ("com.app;id",), (PACKAGE, "--unknown"), (PACKAGE, "extra")):

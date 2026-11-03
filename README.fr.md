@@ -256,6 +256,21 @@ Les configurations locales existantes héritent de la valeur par défaut fournie
 `apps/` est exclu de Git et du contexte Docker, sources et ressources décodées
 comprises ; excluez vous-même les emplacements personnalisés.
 
+`pull <paquet> --report` réutilise le décodage Apktool (sans outil SDK distinct)
+et exige Python hôte 3.9+. Il écrit `report.json` à côté des APK : activités/alias,
+services, receivers et providers exportés, permissions et activation, liens VIEW,
+permissions demandées/définies, indicateurs debuggable, sauvegarde et trafic en
+clair, ainsi que les variantes XML de sécurité réseau décodées. Les valeurs
+implicites historiques d’export et les manifests des fragments sont pris en
+compte. Les éléments data des intent-filters restent groupés sans inventer des
+URL. Les indicateurs référencés par ressource restent des chaînes ; les ressources
+de sécurité non résolues portent `resolved: false`. Cet inventaire statique ne
+prouve pas l’accessibilité : permissions, activation, receivers dynamiques,
+contrôles dans le code et règles de sauvegarde de la plateforme restent à examiner.
+`--report` se combine avec `--apktool`/`--jadx` ; les erreurs de décodage/rapport
+renvoient un échec et conservent APK et résultats intermédiaires. Aucun rapport
+n’est publié si le décodage échoue.
+
 ## Données privées des applications et différences
 
 ```sh

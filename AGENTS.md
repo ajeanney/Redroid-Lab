@@ -31,7 +31,7 @@ Never:
 | Path | Purpose |
 | --- | --- |
 | `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `pull`, `launch`, `snapshot`, `capture`, `frida`, `appdata`. Defines paths, sources `lib/`, dispatches. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
-| `lib/` | Sourced by `redroid.sh`, one area per file: `common.sh` (messages, config, lock, Docker/ADB wrappers), `setup.sh`, `bluetooth.sh` (host takeover/restore), `lifecycle.sh` (`start`/`stop`/`screen`/`status`/`logs`, host state), `capture.sh`, `apps.sh` (`install`/`pull`/`launch`), `appdata.sh` (private live copies/diffs via `appdata.py`), `snapshot.sh`, `frida.sh`. Keep each under ~600 lines |
+| `lib/` | Sourced by `redroid.sh`, one area per file: `common.sh` (messages, config, lock, Docker/ADB wrappers), `setup.sh`, `bluetooth.sh` (host takeover/restore), `lifecycle.sh` (`start`/`stop`/`screen`/`status`/`logs`, host state), `capture.sh`, `apps.sh` (`install`/`pull`/`launch`, optional `--report` via `manifest_report.py`), `appdata.sh` (private live copies/diffs via `appdata.py`), `snapshot.sh`, `frida.sh`. Keep each under ~600 lines |
 | `.shellcheckrc` | Lets `shellcheck redroid.sh` follow the sourced `lib/` files |
 | `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, APK/snapshot/capture directories, capture/Frida ports, transparent table/group, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
 | `apps/` | Gitignored pulls (`<package>/<UTC timestamp>-<random suffix>/`): APKs/splits plus optional `apktool/` and `jadx/` output; set `PULL_DIR` to override |
@@ -62,6 +62,7 @@ shellcheck redroid.sh lib/*.sh   # also: shellcheck build/<file>.sh
 git diff --check
 python3 tests/test_adb_guard.py  # real nft inside `unshare -rn`; host firewall untouched
 python3 tests/test_capture.py    # fake namespaces/firewall/processes; no root or network
+python3 tests/test_manifest_report.py # decoded manifest and network security reports
 python3 tests/test_appdata.py    # safe archive extraction and app-data diffs with fake guest commands
 python3 tests/test_pull.py       # temporary files and fake ADB/analysis tools
 python3 tests/test_snapshot.py   # temporary data and fake commands; no hardware or sudo

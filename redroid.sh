@@ -42,7 +42,7 @@ Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|pull|launch|sna
   status   Show container, host Bluetooth, Android, ABI, and capture status
   logs     Collect container and Android Bluetooth diagnostics
   install  Install an APK, several split APKs, or a directory of splits
-  pull     pull <package> [--apktool] [--jadx]: extract APKs and optionally decode
+  pull     pull <package> [--apktool] [--jadx] [--report]: extract APKs and optionally decode
   appdata  appdata pull|diff <package>: copy private data or compare the last two pulls
   launch   Start an installed app by package name
   snapshot snapshot save|restore <name>: copy stopped Android data, then restart

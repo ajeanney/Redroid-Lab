@@ -249,6 +249,21 @@ repository. Existing local configurations inherit the shipped default. `apps/`
 is excluded from Git and the Docker build context, including decoded sources
 and resources; exclude custom output locations yourself.
 
+`pull <package> --report` reuses Apktool decoding (no separate Android SDK tool)
+and requires host Python 3.9+. It writes `report.json` next to the APKs, covering
+exported activities/aliases, services, receivers and providers, their permissions
+and enabled flags, VIEW deep links, requested/defined permissions, debuggable,
+backup and cleartext flags, plus decoded network-security XML variants.
+The report accounts for legacy exported defaults and includes split manifests.
+Raw intent-filter data elements are kept together rather than inventing URL
+combinations. Resource-valued flags remain strings and unresolved security
+resources are marked `resolved: false`. This is a static inventory: exported
+components may still require permissions or be disabled, and runtime receivers,
+code checks and platform backup rules need separate investigation.
+`--report` combines with `--apktool`/`--jadx`; decode/report errors return nonzero
+and retain APKs and intermediate output. No report is published after a decode
+failure.
+
 ## App data pulls and diffs
 
 ```sh
