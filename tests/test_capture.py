@@ -93,11 +93,27 @@ elif cmd == "nft":
         save(value)
     else:
         sys.exit("unexpected nft command: " + repr(args))
+elif cmd == "scrcpy" and args == ["--help"]:
+    print("--no-playback --no-audio --record")
+elif cmd == "adb" and "logcat" in args:
+    assert "--uid=10123" in args and "epoch" in args and "-T" in args, args
+    ctypes.CDLL(None).prctl(15, b"adb", 0, 0, 0)
+    with (root / "workers").open("a") as log:
+        log.write(str(os.getpid()) + "\n")
+    print("1700000000.1 app event", flush=True)
+    signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    while True:
+        time.sleep(0.02)
 elif cmd == "adb":
     if args[0] == "connect" or "push" in args:
         sys.exit(0)
     shell = shlex.split(" ".join(args[3:]))
-    if shell[:3] == ["pm", "list", "packages"]:
+    if args[2:4] == ["exec-out", "cat"]:
+        print("HCI snoop")
+    elif shell[0] == "date":
+        print("1700000000.123456789")
+    elif shell[:3] == ["pm", "list", "packages"]:
         if fault != "missing-app":
             print("package:com.example.app.extra uid:10002")
             print("package:com.example.app uid:" + ("bad" if fault == "bad-uid" else "10123"))
@@ -115,7 +131,7 @@ elif cmd == "adb":
         save(value)
 elif cmd == "openssl":
     print("12345678")
-elif cmd in ("tcpdump", "mitmdump"):
+elif cmd in ("tcpdump", "mitmdump", "scrcpy"):
     if cmd == "mitmdump" and fault == "proxy":
         sys.exit(1)
     if cmd == "mitmdump" and fault == "port" and any("8080" in a for a in args):
@@ -124,7 +140,13 @@ elif cmd in ("tcpdump", "mitmdump"):
     ctypes.CDLL(None).prctl(15, cmd.encode(), 0, 0, 0)
     with (root / "workers").open("a") as log:
         log.write(str(os.getpid()) + "\n")
-    target = args[args.index("-w") + 1]
+    if cmd == "scrcpy":
+        if fault == "record":
+            sys.exit(1)
+        assert "--no-playback" in args and "--no-audio" in args, args
+        target = next(a.split("=", 1)[1] for a in args if a.startswith("--record="))
+    else:
+        target = args[args.index("-w") + 1]
     Path(target).write_text("captured")
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
@@ -151,7 +173,7 @@ class CaptureTests(unittest.TestCase):
                      "cat", "grep", "awk", "rm", "find", "timeout", "kill"):
             (self.bin / name).symlink_to(shutil.which(name))
         for name in ("sudo", "id", "sleep", "docker", "stat", "lsns", "nsenter", "setpriv",
-                     "nft", "adb", "openssl", "tcpdump", "mitmdump", "modprobe", "rmmod"):
+                     "nft", "adb", "openssl", "tcpdump", "mitmdump", "modprobe", "rmmod", "scrcpy"):
             command = self.bin / name
             command.write_text(FAKE_COMMAND)
             command.chmod(0o755)
@@ -233,6 +255,22 @@ class CaptureTests(unittest.TestCase):
             self.run_capture("start", "--transparent", "--app", "com.example.app", fault=fault, ok=False)
         self.assertFalse((self.root / ".runtime/capture.current").exists())
         self.assertFalse(any(e[0] == "sudo" for e in self.events()))
+
+    def test_optional_timeline_stops_workers_and_collects_snoop(self):
+        self.run_capture("start", "--transparent", "--app", "com.example.app", "--logcat", "--record", "--btsnoop")
+        session = self.session()
+        self.assertIn("app event", (session / "logcat.log").read_text())
+        self.assertTrue((session / "screen.mkv").exists())
+        self.run_capture("stop")
+        self.assertIn("HCI snoop", (session / "btsnoop_hci.log").read_text())
+        self.assertIn("guest-epoch=1700000000.123456789", (session / "timeline.tsv").read_text())
+        self.assertEqual(list(session.glob("*.worker")), [])
+
+    def test_recorder_failure_rolls_back_and_logcat_needs_app(self):
+        self.run_capture("start", "--logcat", ok=False)
+        self.run_capture("start", "--transparent", "--record", fault="record", ok=False)
+        self.assertFalse((self.root / ".runtime/capture.current").exists())
+        self.assertNotIn("table", self.state())
 
     def test_install_failure_rolls_back_proxy_and_processes(self):
         self.run_capture("start", "--transparent", fault="install", ok=False)

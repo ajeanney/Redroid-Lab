@@ -386,6 +386,29 @@ autres UID. Le pcap garde tout le trafic. Les paquets partageant un UID restent
 indissociables ; les processus isolés et les requêtes déléguées à d’autres UID
 échappent au filtre. `--app` exige `--transparent`.
 
+
+Les artefacts optionnels de chronologie rejoignent le dossier de capture :
+
+```sh
+./redroid.sh capture start --transparent --app com.exemple.appli --logcat --record --btsnoop
+```
+
+Les options sont indépendantes : `--logcat` exige `--app` et écrit le logcat
+filtré par UID avec des dates epoch dans `logcat.log` ; `--record` lance scrcpy
+sans affichage ni audio vers `screen.mkv` ; `--btsnoop` copie le journal HCI
+existant à l’arrêt dans `btsnoop_hci.log` (avertissement s’il est absent).
+La journalisation HCI doit être déjà activée ; le fichier circulaire peut
+contenir des événements antérieurs ou perdre des événements à sa rotation.
+La capture ne change aucun réglage Bluetooth. `timeline.tsv` conserve les dates
+epoch de l’hôte, un échantillon encadré de l’horloge invitée et les marqueurs de
+démarrage/arrêt. Pcap, flux, logcat et HCI gardent leurs dates propres ; la vidéo
+part d’un temps relatif. L’alignement reste approximatif, dans la limite du
+délai de démarrage du recorder, sans précision à l’image. Vérifiez le décalage
+hôte/invité dans les échantillons. Arrêt et rollback terminent les processus ;
+SIGINT permet à scrcpy de finaliser la vidéo. Il faut un scrcpy installé avec
+`--no-playback` ou l’ancien `--no-display`. Un `screen` séparé permet les
+interactions. Tous ces fichiers peuvent contenir des données privées.
+
 `tcpdump` tourne en root via `sudo` puis abandonne ses privilèges au profit de
 l'utilisateur appelant : les artefacts lui appartiennent. Les captures
 contiennent des identifiants et des données personnelles déchiffrés : gardez

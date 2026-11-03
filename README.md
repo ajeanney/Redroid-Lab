@@ -375,6 +375,28 @@ The pcap still records all traffic. Packages sharing a UID are inseparable;
 isolated processes and traffic delegated to other UIDs are outside this filter.
 `--app` requires `--transparent`.
 
+
+Optional timeline artifacts share the capture directory:
+
+```sh
+./redroid.sh capture start --transparent --app com.example.app --logcat --record --btsnoop
+```
+
+Choose any flags: `--logcat` requires `--app` and writes UID-filtered, epoch-timed
+logcat to `logcat.log`; `--record` runs a headless, silent scrcpy recording into
+`screen.mkv`; `--btsnoop` copies the existing Bluetooth HCI log on stop into
+`btsnoop_hci.log` (with a warning if unavailable). HCI logging must already be
+enabled; this copies its current ring file, which may include earlier events
+or lose events on rotation. No Bluetooth setting is changed by capture.
+`timeline.tsv` records host epoch timestamps, a bracketed guest clock sample,
+and recorder start/stop markers. Pcap, flows, logcat and HCI retain their own
+timestamps; video starts at a relative offset, so alignment is approximate,
+within recorder startup delay, rather than frame-accurate. Inspect clock
+samples for host/guest skew. Stop and rollback terminate timeline workers;
+SIGINT lets scrcpy finalize the recording. Requires an installed scrcpy with
+`--no-playback` or older `--no-display` support. A separate `screen` can supply
+interactive controls. All artifacts may contain private app data.
+
 `tcpdump` runs as root through `sudo` and then drops privileges to the invoking
 user, so artifacts are user-owned. Captures contain decrypted credentials and
 personal data: keep `captures/` private.

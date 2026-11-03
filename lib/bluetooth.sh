@@ -169,12 +169,12 @@ wait_for_bluetooth() {
 }
 
 collect_hci_snoop() {
-    local remote output=$STATE_DIR/btsnoop_hci.log
+    local remote output=${1:-$STATE_DIR/btsnoop_hci.log}
     for remote in \
         /data/misc/bluetooth/logs/btsnoop_hci.log \
         /data/misc/bluedroid/btsnoop_hci.log; do
         if adb_shell test -s "$remote" >/dev/null 2>&1; then
-            adb_dev exec-out cat "$remote" >"$output"
+            adb_dev exec-out cat "$remote" >"$output" || return 1
             note "HCI snoop saved to $output"
             return 0
         fi

@@ -43,7 +43,7 @@ Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|pull|launch|sna
   pull     pull <package> [--apktool] [--jadx]: extract APKs and optionally decode
   launch   Start an installed app by package name
   snapshot snapshot save|restore <name>: copy stopped Android data, then restart
-  capture  capture start [--no-mitm|--transparent] [--app <pkg>] | stop | status: pcap + decoded HTTPS
+  capture  capture start [--no-mitm|--transparent] [--app <pkg>] [--logcat] [--record] [--btsnoop] | stop | status: pcap + decoded HTTPS
   frida    frida start | stop | unpin <package> | exec <tool> [args]: root hooking
 EOF
 }

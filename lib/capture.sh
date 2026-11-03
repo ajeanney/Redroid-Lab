@@ -225,12 +225,84 @@ capture_start_mitm() {
     fi
 }
 
+# Clock samples bracket the guest query; video offsets are relative to recorder start.
+capture_timeline_mark() {
+    printf '%s\t%s\n' "$(date -u +%s.%N)" "$2" >>"$1/timeline.tsv"
+}
+
+capture_timeline_worker() {
+    local sess=$1 name=$2 pid
+    shift 2
+    capture_timeline_mark "$sess" "$name-start-requested"
+    "$@" >"$sess/$name.log" 2>&1 9>&- &
+    pid=$!
+    printf '%s %s\n' "$pid" "$(awk '{print $22}' "/proc/$pid/stat")" >"$sess/$name.worker"
+    sleep 2
+    kill -0 "$pid" 2>/dev/null || die "$name failed to start (see $sess/$name.log)"
+    capture_timeline_mark "$sess" "$name-started"
+}
+
+capture_start_timeline() {
+    local sess=$1 logcat=$2 record=$3 btsnoop=$4 help guest
+    local args=(-s "$ADB_SERIAL" --no-control --record="$sess/screen.mkv")
+    [[ $logcat == 1 || $record == 1 || $btsnoop == 1 ]] || return 0
+    adb_connect
+    capture_timeline_mark "$sess" host-before-guest-clock
+    guest=$(adb_shell date +%s.%N | tr -d '\r') || die "could not sample Android clock"
+    capture_timeline_mark "$sess" "guest-epoch=$guest"
+    if [[ $btsnoop == 1 ]]; then
+        : >"$sess/btsnoop.requested"
+    fi
+    if [[ $logcat == 1 ]]; then
+        capture_timeline_worker "$sess" logcat "$(type -P adb)" -s "$ADB_SERIAL" \
+            shell logcat --uid="$(<"$sess/app.uid")" -v epoch -T 1
+    fi
+    if [[ $record == 1 ]]; then
+        help=$(scrcpy --help 2>&1)
+        if grep -q -- '--no-audio' <<<"$help"; then args+=(--no-audio); fi
+        if grep -q -- '--no-playback' <<<"$help"; then
+            args+=(--no-playback)
+        elif grep -q -- '--no-display' <<<"$help"; then
+            args+=(--no-display)
+        else
+            die "scrcpy lacks headless recording support (--no-playback or --no-display)"
+        fi
+        capture_timeline_worker "$sess" screen "$(type -P scrcpy)" "${args[@]}"
+    fi
+}
+
+capture_stop_timeline() {
+    local sess=$1 name pid born current
+    for name in logcat screen; do
+        [[ -f $sess/$name.worker ]] || continue
+        read -r pid born <"$sess/$name.worker" || return 1
+        [[ $pid =~ ^[1-9][0-9]*$ && $born =~ ^[0-9]+$ ]] || return 1
+        current=$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)
+        if [[ $current == "$born" ]]; then
+            # SIGINT lets scrcpy flush its video container before exit.
+            kill -INT "$pid" || return 1
+            wait_pid_exit "$pid" || return 1
+        fi
+        rm -f "$sess/$name.worker"
+        capture_timeline_mark "$sess" "$name-stopped"
+    done
+    if [[ -f $sess/btsnoop.requested ]]; then
+        collect_hci_snoop "$sess/btsnoop_hci.log" || warn "HCI snoop unavailable; timeline has no Bluetooth log"
+        rm -f "$sess/btsnoop.requested"
+        capture_timeline_mark "$sess" btsnoop-collected-or-unavailable
+    fi
+}
+
 capture_start() {
     local use_mitm=1 mode=regular sess netns_pid package='' uid=''
+    local logcat=0 record=0 btsnoop=0
     while (( $# )); do
         case $1 in
             --no-mitm) use_mitm=0 ;;
             --transparent) mode=transparent ;;
+            --logcat) logcat=1 ;;
+            --record) record=1 ;;
+            --btsnoop) btsnoop=1 ;;
             --app)
                 [[ $# -ge 2 && -z $package ]] || die "--app requires one package"
                 package=$2; validate_package "$package"; shift
@@ -241,6 +313,9 @@ capture_start() {
     done
     [[ $use_mitm == 1 || $mode != transparent ]] || die "--no-mitm and --transparent cannot be combined"
     [[ -z $package || $mode == transparent ]] || die "--app requires --transparent"
+    [[ $logcat == 0 || -n $package ]] || die "--logcat requires --app <package>"
+    [[ $record == 0 ]] || need scrcpy
+    [[ $logcat == 0 && $record == 0 && $btsnoop == 0 ]] || need adb
     need tcpdump nsenter timeout
     [[ $use_mitm == 0 ]] || need mitmdump openssl nft lsns
     if [[ $mode == transparent ]]; then
@@ -276,6 +351,7 @@ capture_start() {
     else
         note "mitmproxy disabled; capturing raw packets only"
     fi
+    capture_start_timeline "$sess" "$logcat" "$record" "$btsnoop"
     trap - EXIT INT TERM
     note "Capturing. Use the app, then run '$0 capture stop'"
 }
@@ -297,6 +373,8 @@ capture_stop_active() {
         fi
         warn "Android is stopped; previous proxy value remains in $sess/proxy.before for manual recovery"
     fi
+    capture_stop_timeline "$sess" || \
+        { echo "error: timeline cleanup incomplete; keeping capture state for retry" >&2; return 1; }
     pid=$(cat "$sess/mitm.pid" 2>/dev/null || true)
     if proc_is mitmdump "$pid"; then
         kill -TERM "$pid" || return 1

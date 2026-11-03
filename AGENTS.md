@@ -37,7 +37,7 @@ Never:
 | `apps/` | Gitignored pulls (`<package>/<UTC timestamp>-<random suffix>/`): APKs/splits plus optional `apktool/` and `jadx/` output; set `PULL_DIR` to override |
 | `snapshots/` | Gitignored named copies of Android data (`<name>/data/`); `snapshot save\|restore <name>` stops the existing container and restarts it only if it was running |
 | `.redroid-restore.*/` | Private restore staging next to the data directory; previous data retained on restart failure |
-| `captures/` | Gitignored capture sessions (`full.pcap`, `flows.mitm`, `sslkeylog.txt`, `full-decrypted.pcapng`); transparent sessions also record `netns.id`, `redirect.table`, `module.loaded` and `proxy.before` for cleanup |
+| `captures/` | Gitignored capture sessions (`full.pcap`, `flows.mitm`, `sslkeylog.txt`, `full-decrypted.pcapng`); optional timeline flags write UID logcat, a scrcpy recording, HCI snoop and clock anchors; proxied sessions also record `netns.id`, `redirect.table`, `module.loaded` and `proxy.before` for cleanup |
 | `frida/unpin.js` | Java-layer SSL-pinning bypass loaded by `frida unpin` |
 | `.cache/frida/` | Gitignored: downloaded, checksummed `frida-server` binaries |
 | `Dockerfile` | Overlay on the pinned redroid image; builds and installs the Bluetooth HAL |
