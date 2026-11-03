@@ -89,20 +89,28 @@ capture_netns_exec() {
     sudo nsenter -t "$pid" -n sh -c "$NETNS_GUARD" sh "$expected" "$@"
 }
 
-capture_install_redirect() {
-    local sess=$1 port=$2 tables
+capture_install_rules() {
+    local sess=$1 port=${2:-} tables
     tables=$(capture_netns_exec "$sess" nft list tables) || die "cannot inspect capture namespace"
     ! grep -Fxq "table inet $CAPTURE_NFT_TABLE" <<<"$tables" || \
         die "capture nftables table already exists: $CAPTURE_NFT_TABLE"
     printf '%s\n' "$CAPTURE_NFT_TABLE" >"$sess/redirect.table"
-    capture_netns_exec "$sess" nft -f - <<EOF
+    {
+        cat <<EOF
 create table inet $CAPTURE_NFT_TABLE { comment "redroid-capture-${sess##*/}"; }
+add chain inet $CAPTURE_NFT_TABLE quic { type filter hook output priority -120; policy accept; }
+add rule inet $CAPTURE_NFT_TABLE quic udp dport 443 drop
+EOF
+        if [[ -n $port ]]; then
+            cat <<EOF
 add chain inet $CAPTURE_NFT_TABLE output { type nat hook output priority -110; policy accept; }
 add rule inet $CAPTURE_NFT_TABLE output meta skgid $MITM_GID return
 add rule inet $CAPTURE_NFT_TABLE output ip daddr 127.0.0.0/8 return
 add rule inet $CAPTURE_NFT_TABLE output ip6 daddr ::1 return
 add rule inet $CAPTURE_NFT_TABLE output tcp dport { 80, 443 } redirect to :$port
 EOF
+        fi
+    } | capture_netns_exec "$sess" nft -f -
 }
 
 capture_remove_redirect() {
@@ -158,15 +166,15 @@ capture_start_abort() {
     exit "$exit_code"
 }
 
-# Record the Android netns identity and load nft_redir if needed.
-capture_prepare_transparent() {
-    local sess=$1 netns_pid=$2
+# Record the Android netns identity; transparent mode also needs nft_redir.
+capture_prepare_namespace() {
+    local sess=$1 netns_pid=$2 mode=$3
     # Keep metadata owned by the caller, not root.
     # shellcheck disable=SC2024
     sudo stat -Lc %i "/proc/$netns_pid/ns/net" >"$sess/netns.id"
     [[ $(<"$sess/netns.id") != "$(sudo stat -Lc %i /proc/1/ns/net)" ]] || \
-        die "refusing transparent capture in the host network namespace"
-    if [[ ! -d /sys/module/nft_redir ]]; then
+        die "refusing capture rules in the host network namespace"
+    if [[ $mode == transparent && ! -d /sys/module/nft_redir ]]; then
         : >"$sess/module.loaded"
         sudo modprobe nft_redir || die "host kernel lacks nftables redirect support (nft_redir)"
     fi
@@ -206,10 +214,11 @@ capture_start_mitm() {
     endpoint=$(<"$sess/proxy")
     if [[ $mode == transparent ]]; then
         adb_shell settings put global http_proxy :0
-        capture_install_redirect "$sess" "${endpoint##*:}"
+        capture_install_rules "$sess" "${endpoint##*:}"
     else
         note "Pointing Android at the proxy ($endpoint)"
         adb_shell settings put global http_proxy "$endpoint"
+        capture_install_rules "$sess"
     fi
 }
 
@@ -223,9 +232,9 @@ capture_start() {
         *) die "usage: $0 capture start [--no-mitm|--transparent]" ;;
     esac
     need tcpdump nsenter timeout
-    [[ $use_mitm == 0 ]] || need mitmdump openssl
+    [[ $use_mitm == 0 ]] || need mitmdump openssl nft lsns
     if [[ $mode == transparent ]]; then
-        need nft lsns setpriv modprobe rmmod
+        need setpriv modprobe rmmod
         (( $(id -u) != 0 )) || die "run transparent capture as the calling user, not root"
     fi
     require_running
@@ -240,7 +249,7 @@ capture_start() {
     sudo -v
     netns_pid=$(docker inspect -f '{{.State.Pid}}' "$CONTAINER_NAME")
     [[ $netns_pid =~ ^[1-9][0-9]*$ ]] || die "invalid container PID"
-    [[ $mode == regular ]] || capture_prepare_transparent "$sess" "$netns_pid"
+    [[ $use_mitm == 0 ]] || capture_prepare_namespace "$sess" "$netns_pid" "$mode"
     capture_start_tcpdump "$sess" "$netns_pid"
     if [[ $use_mitm == 1 ]]; then
         capture_start_mitm "$sess" "$mode" "$netns_pid"

@@ -355,8 +355,10 @@ and firewall state. Its saved proxy cannot be restored through ADB while it is
 offline; the previous value is kept in `proxy.before` for manual recovery.
 
 Transparent capture does not bypass certificate pinning or app-specific CA
-stores; use Frida where needed. QUIC/HTTP3 (UDP/443), nonstandard ports and
-non-HTTP protocols remain raw in the pcap. Existing connections must be
+stores; use Frida where needed. QUIC/HTTP3 (UDP/443) is blocked in Android’s
+namespace in both proxy modes to encourage TCP fallback; apps without fallback
+may fail. Stop removes the session-owned table. Nonstandard ports and non-HTTP
+protocols remain raw in the pcap. Existing connections must be
 reopened. `--no-mitm` and `--transparent` cannot be combined; raw mode changes
 neither the proxy nor firewall.
 

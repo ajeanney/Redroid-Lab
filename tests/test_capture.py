@@ -77,10 +77,12 @@ elif cmd == "nft":
         if fault == "install":
             sys.exit(1)
         assert "create table inet redroid_capture" in rules
-        assert "meta skgid 2147483647 return" in rules
-        assert "ip daddr 127.0.0.0/8 return" in rules
-        assert "ip6 daddr ::1 return" in rules
-        assert "tcp dport { 80, 443 } redirect to :" in rules
+        assert "udp dport 443 drop" in rules
+        if "redirect to" in rules:
+            assert "meta skgid 2147483647 return" in rules
+            assert "ip daddr 127.0.0.0/8 return" in rules
+            assert "ip6 daddr ::1 return" in rules
+            assert "tcp dport { 80, 443 } redirect to :" in rules
         value.update(table="redroid_capture", rules=rules)
         save(value)
     elif args[:2] == ["delete", "table"]:
@@ -201,7 +203,11 @@ class CaptureTests(unittest.TestCase):
     def test_regular_and_raw_modes_remain_available(self):
         for flags in ((), ("--no-mitm",)):
             self.run_capture("start", *flags)
-            self.assertNotIn("table", self.state())
+            if flags:
+                self.assertNotIn("table", self.state())
+            else:
+                self.assertIn("udp dport 443 drop", self.state()["rules"])
+                self.assertNotIn("redirect to", self.state()["rules"])
             self.run_capture("stop")
             self.assertEqual(self.state()["proxy"], "old.proxy:8888")
 

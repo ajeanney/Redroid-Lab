@@ -366,7 +366,9 @@ les règles de capture. Son proxy ne peut pas être restauré par ADB hors ligne
 la valeur précédente reste dans `proxy.before` pour une récupération manuelle.
 
 Ce mode ne contourne pas le pinning ni les magasins de CA propres aux
-applications : utilisez Frida si nécessaire. QUIC/HTTP3 (UDP/443), les ports
+applications : utilisez Frida si nécessaire. QUIC/HTTP3 (UDP/443) est bloqué dans le namespace Android dans les deux modes
+proxy pour inciter les applications à réessayer en TCP ; celles sans repli TCP
+peuvent échouer. La table propre à la session est supprimée à l’arrêt. Les ports
 non standards et les protocoles non HTTP restent bruts dans le pcap. Les
 connexions déjà ouvertes doivent être recréées. `--no-mitm` et `--transparent`
 sont incompatibles ; le mode brut ne modifie ni proxy ni pare-feu.
