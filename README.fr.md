@@ -488,6 +488,49 @@ ci-dessus, pour les applications qui épinglent en Java. Les hooks ne
 s'appliquent que tant que la commande reste attachée ; `frida exec` exécute
 n'importe quel autre outil Frida (par ex. `frida-trace`) de la même façon.
 
+Les scripts fournis restent actifs tant que le client est attaché :
+
+```sh
+./redroid.sh frida script crypto com.exemple.appli
+./redroid.sh frida script conceal com.exemple.appli
+./redroid.sh frida script native-unpin com.exemple.appli
+./redroid.sh capture start --transparent --app com.exemple.appli
+./redroid.sh frida script flutter-unpin com.exemple.appli
+```
+
+- `crypto` : entrées/sorties, clés et IV de Cipher, Mac et MessageDigest Java en
+  hexadécimal, datés, avec algorithme, identifiants d’objet/thread et métadonnées
+  des buffers. Limite de 4096 octets ; offsets et tailles restent dans les
+  arguments. Les clés non exportables et la crypto native restent hors de portée.
+  Les sorties terminal contiennent des secrets.
+- `conceal` : masque certains fichiers/commandes su, Magisk et émulateur,
+  substitue des propriétés Build/système et désactive les contrôles RootBeer
+  courants dans le processus attaché. L’identité réelle d’Android et de l’hôte
+  reste inchangée. Contrôles spécifiques, inspection proc/mount et attestation
+  distante restent hors de portée.
+- `native-unpin` : intercepte les fonctions exportées de configuration/résultat
+  de vérification OpenSSL/BoringSSL, même dans les bibliothèques chargées plus
+  tard, avec leur convention de succès propre. Rouvrez les connexions ; les
+  implémentations statiques/sans symboles et les comparaisons spécifiques exigent
+  des hooks ciblés.
+- `flutter-unpin` : remplace un symbole unique de vérification BoringSSL chain/peer
+  dans `libflutter.so`. Il affiche `NOT hooked` sans symbole compatible. La plupart
+  des moteurs release sont sans symboles : trouvez l’offset et les 8–64 premiers
+  octets du vérificateur dans cette version exacte, puis passez le JSON Frida `-P` :
+  `flutterOffset` (chaîne hex), `flutterBytes` (hex sans espaces), `flutterVerifier`
+  (`chain` pour le bool `ssl_crypto_x509_session_verify_cert_chain`, succès 1 ;
+  `peer` pour l’enum `ssl_verify_peer_cert`, succès 0). Le script vérifie bornes,
+  mémoire exécutable, alignement ARM64 et octets exacts. Cela détecte les versions
+  incompatibles sans prouver que l’offset vise la bonne fonction. Aucun offset
+  deviné ni balayage de signatures. Exigez un message `hooked` et des requêtes
+  décodées. Les hooks ARM traduits restent non vérifiés ; préférez x86_64 sur cet hôte.
+
+Les arguments supplémentaires vont à Frida, dont `-P` et d’autres fichiers `-l`
+(par exemple `-l "$PWD/frida/unpin.js"` pour ajouter le bypass Java). Les clients
+Flutter/natifs ignorant le proxy système exigent une capture transparente.
+Les hooks suivent l’[API de modules Frida](https://frida.re/docs/javascript-api/#process)
+et les [conventions BoringSSL](https://github.com/google/boringssl/blob/master/include/openssl/ssl.h).
+
 ## Support des applications ARM
 
 L'image épinglée contient `libndk_translation` et les bibliothèques invitées ARM64.

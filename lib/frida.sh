@@ -96,10 +96,23 @@ cmd_frida() {
         start) acquire_lock; need adb; frida_start ;;
         stop) acquire_lock; need adb; frida_stop ;;
         unpin)
-            [[ -n ${1:-} ]] || die "usage: $0 frida unpin <package>"
+            [[ $# == 1 ]] || die "usage: $0 frida unpin <package>"
+            validate_package "$1"
             frida_require_running
             # The hooks live only while this client stays attached; exit the REPL to detach.
             frida_host frida -f "$1" -l "$SCRIPT_DIR/frida/unpin.js"
+            ;;
+        script)
+            [[ $# -ge 2 ]] || die "usage: $0 frida script <crypto|conceal|native-unpin|flutter-unpin> <package> [frida args]"
+            local script=$1 package=$2
+            case $script in
+                crypto|conceal|native-unpin|flutter-unpin) ;;
+                *) die "unknown bundled Frida script: $script" ;;
+            esac
+            validate_package "$package"
+            shift 2
+            frida_require_running
+            frida_host frida -f "$package" -l "$SCRIPT_DIR/frida/$script.js" "$@"
             ;;
         exec)
             [[ $# -ge 1 ]] || die "usage: $0 frida exec <frida|frida-ps|frida-trace|...> [args]"

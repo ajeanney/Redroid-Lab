@@ -39,7 +39,7 @@ Never:
 | `snapshots/` | Gitignored named copies of Android data (`<name>/data/`); `snapshot save\|restore <name>` stops the existing container and restarts it only if it was running |
 | `.redroid-restore.*/` | Private restore staging next to the data directory; previous data retained on restart failure |
 | `captures/` | Gitignored capture sessions (`full.pcap`, `flows.mitm`, `sslkeylog.txt`, `full-decrypted.pcapng`); optional timeline flags write UID logcat, a scrcpy recording, HCI snoop and clock anchors; proxied sessions also record `netns.id`, `redirect.table`, `module.loaded` and `proxy.before` for cleanup |
-| `frida/unpin.js` | Java-layer SSL-pinning bypass loaded by `frida unpin` |
+| `frida/` | `unpin.js` is the Java TLS bypass; `frida script <name> <package> [args]` selects crypto, conceal, native-unpin or flutter-unpin hooks |
 | `.cache/frida/` | Gitignored: downloaded, checksummed `frida-server` binaries |
 | `Dockerfile` | Overlay on the pinned redroid image; builds and installs the Bluetooth HAL |
 | `build-inputs.env` | Pinned source URLs and SHA-256 sums for the HAL build, plus the pinned Frida version/checksum |
@@ -62,6 +62,8 @@ shellcheck redroid.sh lib/*.sh   # also: shellcheck build/<file>.sh
 git diff --check
 python3 tests/test_adb_guard.py  # real nft inside `unshare -rn`; host firewall untouched
 python3 tests/test_capture.py    # fake namespaces/firewall/processes; no root or network
+node tests/test_frida_scripts.js # mocked Frida APIs, no guest or network
+python3 tests/test_frida.py      # Frida script dispatch and package validation
 python3 tests/test_manifest_report.py # decoded manifest and network security reports
 python3 tests/test_appdata.py    # safe archive extraction and app-data diffs with fake guest commands
 python3 tests/test_pull.py       # temporary files and fake ADB/analysis tools

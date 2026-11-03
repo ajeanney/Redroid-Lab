@@ -471,6 +471,47 @@ packet-capture section above, for apps that pin in Java. The hooks apply only
 while the command stays attached; `frida exec` runs any other Frida CLI tool
 (e.g. `frida-trace`) the same way.
 
+Bundled scripts stay active while attached:
+
+```sh
+./redroid.sh frida script crypto com.example.app
+./redroid.sh frida script conceal com.example.app
+./redroid.sh frida script native-unpin com.example.app
+./redroid.sh capture start --transparent --app com.example.app
+./redroid.sh frida script flutter-unpin com.example.app
+```
+
+- `crypto`: timestamped Java Cipher/Mac/MessageDigest input, output, keys and
+  Cipher IVs as hex, with algorithm, object/thread IDs and buffer metadata.
+  Dumps stop at 4096 bytes; offsets/lengths remain in the arguments.
+  Non-exportable keys and native crypto are outside these hooks. Terminal output
+  contains secret material.
+- `conceal`: hides selected su/Magisk/emulator files and commands, substitutes
+  common Build/system properties, and disables common RootBeer checks in the
+  attached process. Actual device/host identity stays unchanged. Custom checks,
+  proc/mount inspection and remote integrity attestation remain outside coverage.
+- `native-unpin`: hooks exported OpenSSL/BoringSSL verification setters/results,
+  including late-loaded libraries, with their respective success conventions.
+  Reopen connections; static/stripped implementations and custom native pin
+  comparisons need targeted hooks.
+- `flutter-unpin`: replaces a unique BoringSSL chain/peer verifier symbol in
+  `libflutter.so`. It prints `NOT hooked` without a compatible symbol. Most release
+  engines are stripped: find the verifier offset and first 8–64 bytes in that
+  exact build, then pass Frida `-P` JSON parameters: `flutterOffset` (hex string),
+  `flutterBytes` (hex without spaces), `flutterVerifier` (`chain` for the bool
+  `ssl_crypto_x509_session_verify_cert_chain`, success 1; `peer` for the enum
+  `ssl_verify_peer_cert`, success 0). The script checks bounds, executable memory,
+  ARM64 alignment and exact bytes before hooking. This detects mismatched builds,
+  without proving the offset identifies the correct function. No guessed offsets
+  or signature scans are used. Require a `hooked` message and decoded requests.
+  Hooks into translated ARM code are unverified; prefer native x86_64 on this host.
+
+Extra arguments pass through to Frida, including `-P` and additional `-l` files
+(e.g. `-l "$PWD/frida/unpin.js"` to combine Java pinning bypass with a pack script).
+Flutter/native clients that ignore Android's system proxy need transparent capture.
+Hooks follow the [Frida module API](https://frida.re/docs/javascript-api/#process)
+and [BoringSSL verification conventions](https://github.com/google/boringssl/blob/master/include/openssl/ssl.h).
+
 ## ARM application support
 
 The pinned image contains `libndk_translation` and ARM64 guest libraries. The
