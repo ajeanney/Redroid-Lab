@@ -94,7 +94,7 @@ elif cmd == "nft":
     else:
         sys.exit("unexpected nft command: " + repr(args))
 elif cmd == "scrcpy" and args == ["--help"]:
-    print("--no-playback --no-audio --record")
+    print("--no-display --record" if fault == "old-scrcpy" else "--no-playback --no-audio --record")
 elif cmd == "adb" and "logcat" in args:
     assert "--uid=10123" in args and "epoch" in args and "-T" in args, args
     ctypes.CDLL(None).prctl(15, b"adb", 0, 0, 0)
@@ -143,7 +143,10 @@ elif cmd in ("tcpdump", "mitmdump", "scrcpy"):
     if cmd == "scrcpy":
         if fault == "record":
             sys.exit(1)
-        assert "--no-playback" in args and "--no-audio" in args, args
+        if fault == "old-scrcpy":
+            assert "--no-display" in args and "--no-audio" not in args, args
+        else:
+            assert "--no-playback" in args and "--no-audio" in args, args
         target = next(a.split("=", 1)[1] for a in args if a.startswith("--record="))
     else:
         target = args[args.index("-w") + 1]
@@ -271,6 +274,21 @@ class CaptureTests(unittest.TestCase):
         self.run_capture("start", "--transparent", "--record", fault="record", ok=False)
         self.assertFalse((self.root / ".runtime/capture.current").exists())
         self.assertNotIn("table", self.state())
+
+    def test_legacy_headless_recorder_works_in_raw_mode(self):
+        self.run_capture("start", "--no-mitm", "--record", fault="old-scrcpy")
+        self.assertNotIn("table", self.state())
+        self.assertTrue((self.session() / "screen.mkv").exists())
+        self.run_capture("stop")
+
+    def test_timeline_does_not_signal_a_reused_pid(self):
+        self.run_capture("start", "--no-mitm", "--record")
+        worker = self.session() / "screen.worker"
+        pid, born = worker.read_text().split()
+        worker.write_text(f"{pid} {int(born) + 1}\n")
+        self.run_capture("stop")
+        # A process with a different birth time belongs to somebody else.
+        os.kill(int(pid), 0)
 
     def test_install_failure_rolls_back_proxy_and_processes(self):
         self.run_capture("start", "--transparent", fault="install", ok=False)

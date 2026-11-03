@@ -7,6 +7,9 @@
 # never run the command in another namespace.
 # shellcheck disable=SC2016
 PIDFILE_EXEC='echo $$ >"$1"; shift; exec "$@"'
+# Record birth time before exec, even if the tool then fails immediately.
+# shellcheck disable=SC2016
+TIMELINE_EXEC='set -e; born=$(awk "{print \$22}" "/proc/$$/stat"); printf "%s %s\n" "$$" "$born" >"$1"; shift; exec "$@"'
 # shellcheck disable=SC2016
 NETNS_GUARD='[ "$(stat -Lc %i /proc/self/ns/net)" = "$1" ] || exit 1; shift; exec "$@"'
 
@@ -234,9 +237,8 @@ capture_timeline_worker() {
     local sess=$1 name=$2 pid
     shift 2
     capture_timeline_mark "$sess" "$name-start-requested"
-    "$@" >"$sess/$name.log" 2>&1 9>&- &
+    sh -c "$TIMELINE_EXEC" sh "$sess/$name.worker" "$@" >"$sess/$name.log" 2>&1 9>&- &
     pid=$!
-    printf '%s %s\n' "$pid" "$(awk '{print $22}' "/proc/$pid/stat")" >"$sess/$name.worker"
     sleep 2
     kill -0 "$pid" 2>/dev/null || die "$name failed to start (see $sess/$name.log)"
     capture_timeline_mark "$sess" "$name-started"
@@ -280,7 +282,11 @@ capture_stop_timeline() {
         current=$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)
         if [[ $current == "$born" ]]; then
             # SIGINT lets scrcpy flush its video container before exit.
-            kill -INT "$pid" || return 1
+            if [[ $name == screen ]]; then
+                kill -INT "$pid" || return 1
+            else
+                kill -TERM "$pid" || return 1
+            fi
             wait_pid_exit "$pid" || return 1
         fi
         rm -f "$sess/$name.worker"
