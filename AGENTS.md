@@ -16,25 +16,26 @@ Allowed without asking:
 - `./redroid.sh status` (read-only)
 
 Ask first:
-- `./redroid.sh setup | start | stop | screen | logs | install | pull | launch | snapshot | capture | frida` (installs packages, builds images, takes over Bluetooth, writes `.runtime/`, `apps/`, `snapshots/`, `captures/` and `.cache/frida/`; snapshot restore replaces Android data)
+- `./redroid.sh setup | start | stop | screen | logs | install | pull | launch | snapshot | capture | frida | appdata` (installs packages, builds images, takes over Bluetooth, writes `.runtime/`, `apps/`, `appdata/`, `snapshots/`, `captures/` and `.cache/frida/`; snapshot restore replaces Android data)
 - Any `docker`, `systemctl`, `bluetoothctl`, `btmgmt`, `nft`, `modprobe` or `sudo` command
 - `git commit`, `git push`, deleting files, adding dependencies or changing pinned digests/checksums
 
 Never:
 - Run `systemctl start bluetooth` or touch `hci0` by hand while `.runtime/state.env` exists; the script owns recovery (use `./redroid.sh stop`, with approval)
 - Loosen the `ADB_HOST` loopback-only check or publish ADB on a non-loopback address
-- Commit `data/`, `apps/`, `snapshots/`, `.redroid-restore.*/`, `.runtime/`, `.cache/`, `captures/`, APKs, keystores, logs, Bluetooth bonds or any `*.local.*` file
+- Commit `data/`, `apps/`, `appdata/`, `snapshots/`, `.redroid-restore.*/`, `.runtime/`, `.cache/`, `captures/`, APKs, keystores, logs, Bluetooth bonds or any `*.local.*` file
 - Put secrets, tokens or personal data in tracked files, including this one
 
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `pull`, `launch`, `snapshot`, `capture`, `frida`. Defines paths, sources `lib/`, dispatches. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
-| `lib/` | Sourced by `redroid.sh`, one area per file: `common.sh` (messages, config, lock, Docker/ADB wrappers), `setup.sh`, `bluetooth.sh` (host takeover/restore), `lifecycle.sh` (`start`/`stop`/`screen`/`status`/`logs`, host state), `capture.sh`, `apps.sh` (`install`/`pull`/`launch`), `snapshot.sh`, `frida.sh`. Keep each under ~600 lines |
+| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `pull`, `launch`, `snapshot`, `capture`, `frida`, `appdata`. Defines paths, sources `lib/`, dispatches. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
+| `lib/` | Sourced by `redroid.sh`, one area per file: `common.sh` (messages, config, lock, Docker/ADB wrappers), `setup.sh`, `bluetooth.sh` (host takeover/restore), `lifecycle.sh` (`start`/`stop`/`screen`/`status`/`logs`, host state), `capture.sh`, `apps.sh` (`install`/`pull`/`launch`), `appdata.sh` (private live copies/diffs via `appdata.py`), `snapshot.sh`, `frida.sh`. Keep each under ~600 lines |
 | `.shellcheckrc` | Lets `shellcheck redroid.sh` follow the sourced `lib/` files |
 | `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, APK/snapshot/capture directories, capture/Frida ports, transparent table/group, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
 | `apps/` | Gitignored pulls (`<package>/<UTC timestamp>-<random suffix>/`): APKs/splits plus optional `apktool/` and `jadx/` output; set `PULL_DIR` to override |
+| `appdata/` | Gitignored private user-0 app data pulls; `appdata pull <package>` copies live data, `appdata diff <package>` compares the last two completed copies |
 | `snapshots/` | Gitignored named copies of Android data (`<name>/data/`); `snapshot save\|restore <name>` stops the existing container and restarts it only if it was running |
 | `.redroid-restore.*/` | Private restore staging next to the data directory; previous data retained on restart failure |
 | `captures/` | Gitignored capture sessions (`full.pcap`, `flows.mitm`, `sslkeylog.txt`, `full-decrypted.pcapng`); optional timeline flags write UID logcat, a scrcpy recording, HCI snoop and clock anchors; proxied sessions also record `netns.id`, `redirect.table`, `module.loaded` and `proxy.before` for cleanup |
@@ -61,6 +62,7 @@ shellcheck redroid.sh lib/*.sh   # also: shellcheck build/<file>.sh
 git diff --check
 python3 tests/test_adb_guard.py  # real nft inside `unshare -rn`; host firewall untouched
 python3 tests/test_capture.py    # fake namespaces/firewall/processes; no root or network
+python3 tests/test_appdata.py    # safe archive extraction and app-data diffs with fake guest commands
 python3 tests/test_pull.py       # temporary files and fake ADB/analysis tools
 python3 tests/test_snapshot.py   # temporary data and fake commands; no hardware or sudo
 ```

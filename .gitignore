@@ -44,3 +44,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Private application data copies and Python bytecode
+/appdata/
+__pycache__/

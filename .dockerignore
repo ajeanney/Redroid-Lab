@@ -33,3 +33,6 @@ redroid.local.env
 
 # Documentation is not needed by the image build
 *.md
+
+# Private application data copies
+appdata

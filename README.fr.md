@@ -256,6 +256,38 @@ Les configurations locales existantes héritent de la valeur par défaut fournie
 `apps/` est exclu de Git et du contexte Docker, sources et ressources décodées
 comprises ; excluez vous-même les emplacements personnalisés.
 
+## Données privées des applications et différences
+
+```sh
+./redroid.sh appdata pull com.exemple.appli
+# ... effectuez une action dans l’application ...
+./redroid.sh appdata pull com.exemple.appli
+./redroid.sh appdata diff com.exemple.appli
+```
+
+`pull` lit `/data/data/<paquet>` (utilisateur Android 0) en tar avec le root
+invité puis extrait sous votre utilisateur hôte dans un dossier privé
+`appdata/<paquet>/<horodatage UTC>-<suffixe aléatoire>/data/`. Préférences,
+fichiers SQLite (WAL/SHM compris) et autres fichiers privés sont copiés sans
+écraser les extractions précédentes. L’extracteur refuse les chemins et liens
+sortant du dossier, les fichiers spéciaux et les écritures à travers un lien.
+Les échecs conservent `data.part/`, exclu des comparaisons. Propriétaire et droits
+sont ceux d’une copie privée pour investigation, pas d’une sauvegarde restaurable.
+
+`diff` compare les deux dernières copies terminées, par date de fin, sans ADB.
+Il liste ajouts/suppressions/modifications avec différences textuelles UTF-8 ;
+les binaires (dont SQLite) et fichiers de plus de 1 Mio sont comparés par
+SHA-256, sans analyse des lignes SQL. Des différences renvoient un succès ;
+les copies absentes et erreurs de lecture échouent. Le verrou du cycle de vie
+est pris, mais l’application continue : les écritures concurrentes peuvent
+rendre les bases incohérentes. Immobilisez l’application vous-même pour une
+copie cohérente ; utilisez les instantanés pour restaurer. Stockage externe et
+autres utilisateurs sont exclus. `APPDATA_DIR` change la racine ; les anciennes
+configurations locales héritent de la valeur par défaut. Le dossier par défaut
+est exclu de Git/Docker ; excluez vos emplacements personnalisés. Ces copies
+peuvent contenir des identifiants et jetons. Python hôte 3.9+ et root invité
+sont nécessaires ; redroid fournit déjà le root.
+
 ## Instantanés
 
 ```sh

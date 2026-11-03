@@ -50,7 +50,7 @@ load_config() {
     source "$CONFIG_FILE"
     local name default
     # Existing local configurations inherit defaults for newly added settings.
-    for name in SNAPSHOT_DIR PULL_DIR CAPTURE_NFT_TABLE MITM_GID; do
+    for name in SNAPSHOT_DIR PULL_DIR APPDATA_DIR CAPTURE_NFT_TABLE MITM_GID; do
         if [[ ! -v $name ]]; then
             # shellcheck source=/dev/null
             default=$(source "$SCRIPT_DIR/redroid.env"; printf '%s' "${!name}")
@@ -61,7 +61,7 @@ load_config() {
         BT_ADAPTER NFT_TABLE REDROID_DATA_DIR REDROID_WIDTH REDROID_HEIGHT \
         REDROID_DPI REDROID_FPS REDROID_GPU_MODE REDROID_NATIVE_BRIDGE \
         HOST_NETNS_SOURCE BOOT_TIMEOUT BT_ENABLE CAPTURE_DIR MITM_PORT FRIDA_PORT \
-        SNAPSHOT_DIR PULL_DIR CAPTURE_NFT_TABLE MITM_GID; do
+        SNAPSHOT_DIR PULL_DIR APPDATA_DIR CAPTURE_NFT_TABLE MITM_GID; do
         [[ -n ${!name:-} ]] || die "missing configuration value '$name'"
     done
     for name in ADB_PORT MITM_PORT FRIDA_PORT; do
@@ -77,7 +77,7 @@ load_config() {
         die "MITM_GID must be an unused Android group between 1000000000 and 2147483647"
     fi
     # Relative directories are relative to the toolbox, not the caller's cwd.
-    for name in REDROID_DATA_DIR CAPTURE_DIR SNAPSHOT_DIR PULL_DIR; do
+    for name in REDROID_DATA_DIR CAPTURE_DIR SNAPSHOT_DIR PULL_DIR APPDATA_DIR; do
         [[ ${!name} == /* ]] || printf -v "$name" '%s' "$SCRIPT_DIR/${!name#./}"
     done
     ADB_SERIAL=$ADB_HOST:$ADB_PORT

@@ -249,6 +249,36 @@ repository. Existing local configurations inherit the shipped default. `apps/`
 is excluded from Git and the Docker build context, including decoded sources
 and resources; exclude custom output locations yourself.
 
+## App data pulls and diffs
+
+```sh
+./redroid.sh appdata pull com.example.app
+# ... perform an action in the app ...
+./redroid.sh appdata pull com.example.app
+./redroid.sh appdata diff com.example.app
+```
+
+`pull` streams `/data/data/<package>` (Android user 0) as a root-created tar from
+the guest and extracts it as your host user into a private
+`appdata/<package>/<UTC timestamp>-<random suffix>/data/` directory. Preferences,
+SQLite files (including WAL/SHM), and other private files are copied. Existing
+pulls are preserved. The extractor rejects paths and links escaping the output,
+special files and writes through symlinks. Failed copies keep `data.part/` and
+are excluded from diffs. Files are host-owned with private permissions; this
+is an investigation copy, not a restorable filesystem backup.
+
+`diff` compares the last two completed pulls by completion time, without ADB.
+It lists added/removed/changed paths and unified UTF-8 text diffs; binary files
+(including SQLite) and files over 1 MiB are compared by SHA-256, not database
+rows. Differences return success; missing copies and read errors fail.
+Pulls hold the lifecycle lock but do not stop the app: concurrent writes can
+produce inconsistent databases. Quiesce the app yourself for consistent data;
+use full snapshots for restoration. External storage and other Android users
+are excluded. `APPDATA_DIR` overrides the root directory; old local configs
+inherit the default. The default directory is excluded from Git and Docker;
+exclude custom locations yourself. Copies may contain credentials and tokens.
+Requires host Python 3.9+ and guest root, already provided by redroid.
+
 ## Snapshots
 
 ```sh

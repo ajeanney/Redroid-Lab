@@ -24,6 +24,8 @@ source "$SCRIPT_DIR/lib/lifecycle.sh"
 source "$SCRIPT_DIR/lib/capture.sh"
 # shellcheck source=lib/apps.sh
 source "$SCRIPT_DIR/lib/apps.sh"
+# shellcheck source=lib/appdata.sh
+source "$SCRIPT_DIR/lib/appdata.sh"
 # shellcheck source=lib/snapshot.sh
 source "$SCRIPT_DIR/lib/snapshot.sh"
 # shellcheck source=lib/frida.sh
@@ -31,7 +33,7 @@ source "$SCRIPT_DIR/lib/frida.sh"
 
 usage() {
     cat <<'EOF'
-Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|pull|launch|snapshot|capture|frida}
+Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|pull|launch|snapshot|capture|frida|appdata}
 
   setup    Install missing Arch/Debian/Ubuntu tools and build the image
   start    Boot redroid; give hci0 to Android unless --no-bt (or BT_ENABLE=0)
@@ -41,6 +43,7 @@ Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|pull|launch|sna
   logs     Collect container and Android Bluetooth diagnostics
   install  Install an APK, several split APKs, or a directory of splits
   pull     pull <package> [--apktool] [--jadx]: extract APKs and optionally decode
+  appdata  appdata pull|diff <package>: copy private data or compare the last two pulls
   launch   Start an installed app by package name
   snapshot snapshot save|restore <name>: copy stopped Android data, then restart
   capture  capture start [--no-mitm|--transparent] [--app <pkg>] [--logcat] [--record] [--btsnoop] | stop | status: pcap + decoded HTTPS
@@ -58,6 +61,7 @@ case ${1:-} in
     logs) cmd_logs ;;
     install) shift; cmd_install "$@" ;;
     pull) shift; cmd_pull "$@" ;;
+    appdata) shift; cmd_appdata "$@" ;;
     launch) shift; cmd_launch "$@" ;;
     snapshot) shift; cmd_snapshot "$@" ;;
     capture) shift; cmd_capture "$@" ;;
