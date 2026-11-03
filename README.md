@@ -17,6 +17,7 @@ inspection, and similar reverse-engineering workflows.
 | Network packet capture (pcap + decoded HTTPS) and APK install | Available |
 | Root-based app investigation: Frida hooking and SSL-pinning bypass | Available |
 | Named snapshots of Android data for repeatable app states | Available |
+| Pull installed APKs and splits, with optional apktool/jadx analysis | Available |
 
 "Planned" rows are goals; none is implemented yet.
 
@@ -82,6 +83,7 @@ same time.
 - for Bluetooth passthrough only: a controller exposed as `hciN` (any vendor; `btusb` for the reset fallback)
 - for capture: `tcpdump`, `mitmproxy`, Wireshark's `editcap` and `nsenter`; `setup` installs them on Arch, Debian and Ubuntu, and `capture start` needs `sudo` for tcpdump
 - for Frida: `curl` and `xz` (installed by `setup`); `frida unpin`/`exec` use `uv`'s `uvx` to run the matching host client unless one matching the pinned version is already installed
+- for optional static analysis: host commands `apktool` and/or `jadx`, with their Java runtime; install them separately, as `setup` does not install them
 - approximately 10 GB of free space for images, build inputs, and cache
 - outbound HTTPS access during the initial build
 
@@ -170,6 +172,7 @@ and restores the host's previous BlueZ and adapter power state.
 | `./redroid.sh status` | Show container, Android, ABI, BlueZ, and btlinux readiness |
 | `./redroid.sh logs` | Print Bluetooth diagnostics and save HCI snoop data when available |
 | `./redroid.sh install <apk\|dir>...` | Install one APK, several split APKs, or a directory of splits (`base.apk` + `split_config.*.apk`) |
+| `./redroid.sh pull <package> [--apktool] [--jadx]` | Extract installed APKs and splits; optionally decode resources/smali or decompile Java sources |
 | `./redroid.sh launch <package>` | Start an installed app headlessly (then watch it with `screen`) |
 | `./redroid.sh snapshot save\|restore <name>` | Save or replace Android data while the container is stopped; restart it if it was running |
 | `./redroid.sh capture start [--no-mitm]` | Record all container traffic to `captures/<UTC timestamp>/` |
@@ -192,6 +195,7 @@ Defaults are in `redroid.env`:
 - host-forwarded Frida port (`FRIDA_PORT`, loopback only)
 - persistent data directory
 - snapshot directory (`SNAPSHOT_DIR`, default `./snapshots`)
+- APK extraction directory (`PULL_DIR`, default `./apps`)
 - display resolution, density, and frame rate
 - GPU and native-bridge settings
 - startup timeout and host network-namespace path
@@ -210,6 +214,38 @@ Use the same configuration for every lifecycle command.
 Android data persists under `data/`. Install applications with
 `./redroid.sh install /path/to/application.apk` (or a directory of split APKs).
 No Google services or Play Store are included.
+
+## App pull and static analysis
+
+```sh
+./redroid.sh pull com.example.app
+./redroid.sh pull com.example.app --apktool --jadx
+```
+
+`pull` queries Android with `pm path` and copies every installed APK for that
+package into a new private `apps/<package>/<UTC timestamp>-<random suffix>/`
+directory. Original filenames are preserved, including split APKs; the complete
+directory can be passed back to `./redroid.sh install <directory>`. Each run
+creates a separate directory, leaving earlier pulls intact. Only installed APKs
+are copied, not app databases, preferences or missing on-demand modules.
+
+The optional host tools must already be on `PATH`. With `--apktool`,
+[Apktool](https://apktool.org/docs/cli-parameters/) decodes each APK into
+`apktool/<APK filename without .apk>/`. With `--jadx`,
+[JADX](https://github.com/skylot/jadx#usage) receives the APK and all splits
+together and writes to `jadx/`. Both flags can be combined. The lifecycle lock
+is held during extraction and released before analysis.
+
+Missing tools fail before extraction. Copy failures return a nonzero status and
+leave incomplete files named `*.apk.part`; do not reinstall an incomplete pull.
+Analysis failures also return a nonzero status, keeping the extracted APKs and
+any analysis output for inspection. When both tools are requested, each is
+attempted even if the other reports errors.
+
+`PULL_DIR` selects the output root; relative paths are resolved from the
+repository. Existing local configurations inherit the shipped default. `apps/`
+is excluded from Git and the Docker build context, including decoded sources
+and resources; exclude custom output locations yourself.
 
 ## Snapshots
 

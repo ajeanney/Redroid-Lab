@@ -25,17 +25,21 @@ load_config() {
     [[ -r $CONFIG_FILE ]] || die "configuration not found: $CONFIG_FILE"
     # shellcheck disable=SC1090
     source "$CONFIG_FILE"
-    # Existing local configurations predate snapshots; inherit the shipped default.
+    # Existing local configurations inherit defaults for newly added settings.
     if [[ ! -v SNAPSHOT_DIR ]]; then
         # shellcheck disable=SC1091
         SNAPSHOT_DIR=$(source "$SCRIPT_DIR/redroid.env"; printf '%s' "$SNAPSHOT_DIR")
+    fi
+    if [[ ! -v PULL_DIR ]]; then
+        # shellcheck disable=SC1091
+        PULL_DIR=$(source "$SCRIPT_DIR/redroid.env"; printf '%s' "$PULL_DIR")
     fi
 
     local name
     for name in BASE_IMAGE LOCAL_IMAGE CONTAINER_NAME ADB_HOST ADB_PORT \
         BT_ADAPTER NFT_TABLE REDROID_DATA_DIR REDROID_WIDTH REDROID_HEIGHT \
         REDROID_DPI REDROID_FPS REDROID_GPU_MODE REDROID_NATIVE_BRIDGE \
-        HOST_NETNS_SOURCE BOOT_TIMEOUT BT_ENABLE CAPTURE_DIR MITM_PORT FRIDA_PORT SNAPSHOT_DIR; do
+        HOST_NETNS_SOURCE BOOT_TIMEOUT BT_ENABLE CAPTURE_DIR MITM_PORT FRIDA_PORT SNAPSHOT_DIR PULL_DIR; do
         [[ -n ${!name:-} ]] || die "missing configuration value '$name'"
     done
     if [[ ! $ADB_PORT =~ ^[0-9]+$ ]] || (( ADB_PORT < 1 || ADB_PORT > 65535 )); then
@@ -59,6 +63,7 @@ load_config() {
     fi
     [[ $CAPTURE_DIR == /* ]] || CAPTURE_DIR=$SCRIPT_DIR/${CAPTURE_DIR#./}
     [[ $SNAPSHOT_DIR == /* ]] || SNAPSHOT_DIR=$SCRIPT_DIR/${SNAPSHOT_DIR#./}
+    [[ $PULL_DIR == /* ]] || PULL_DIR=$SCRIPT_DIR/${PULL_DIR#./}
     ADB_SERIAL=$ADB_HOST:$ADB_PORT
 }
 
@@ -989,6 +994,75 @@ cmd_install() {
     fi
 }
 
+cmd_pull() {
+    local package=${1:-} option use_apktool=0 use_jadx=0 paths path name output apk
+    local analysis_failed=0
+    local remote_paths=() apks=()
+    local -A names=()
+    [[ $# -gt 0 ]] || die "usage: $0 pull <package> [--apktool] [--jadx]"
+    shift
+    [[ $package =~ ^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$ ]] || \
+        die "invalid Android package name: $package"
+    for option; do
+        case $option in
+            --apktool) use_apktool=1 ;;
+            --jadx) use_jadx=1 ;;
+            *) die "usage: $0 pull <package> [--apktool] [--jadx]" ;;
+        esac
+    done
+    need adb
+    need flock
+    [[ $use_apktool == 0 ]] || need apktool
+    [[ $use_jadx == 0 ]] || need jadx
+    acquire_lock
+    adb connect "$ADB_SERIAL" >/dev/null || die "cannot connect to Android at $ADB_SERIAL"
+    paths=$(adb_shell pm path "$package" | tr -d '\r') || \
+        die "could not query APK paths for $package"
+    [[ -n $paths ]] || die "package is not installed: $package"
+    while IFS= read -r path; do
+        [[ $path == package:/*.apk ]] || die "unexpected APK path: $path"
+        path=${path#package:}
+        name=${path##*/}
+        [[ $name =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*\.apk$ ]] || die "unsafe APK filename: $name"
+        [[ -z ${names[$name]+set} ]] || die "duplicate APK filename: $name"
+        names[$name]=1
+        remote_paths+=("$path")
+    done <<<"$paths"
+
+    umask 077
+    mkdir -p -- "$PULL_DIR/$package"
+    output=$(mktemp -d "$PULL_DIR/$package/$(date -u +%Y%m%d-%H%M%SZ)-XXXXXX")
+    note "Pull directory: $output"
+    for path in "${remote_paths[@]}"; do
+        name=${path##*/}
+        adb -s "$ADB_SERIAL" pull "$path" "$output/$name.part" || \
+            die "APK pull failed; incomplete output retained at $output"
+        [[ -f $output/$name.part && -s $output/$name.part ]] || \
+            die "empty or invalid APK pulled; incomplete output retained at $output"
+        mv -- "$output/$name.part" "$output/$name"
+        apks+=("$output/$name")
+    done
+    note "Pulled ${#apks[@]} APK(s) to $output"
+    # Analysis only uses host files and must not block Android lifecycle commands.
+    exec 9>&-
+    if [[ $use_apktool == 1 ]]; then
+        for apk in "${apks[@]}"; do
+            name=${apk##*/}
+            if ! apktool d "$apk" -o "$output/apktool/${name%.apk}"; then
+                echo "warning: apktool failed for $name" >&2
+                analysis_failed=1
+            fi
+        done
+    fi
+    if [[ $use_jadx == 1 ]]; then
+        if ! jadx -d "$output/jadx" "${apks[@]}"; then
+            echo "warning: jadx failed" >&2
+            analysis_failed=1
+        fi
+    fi
+    [[ $analysis_failed == 0 ]] || die "static analysis failed; APKs and analysis output retained at $output"
+}
+
 cmd_launch() {
     local package=${1:-} activity
     [[ -n $package ]] || die "usage: $0 launch <package>"
@@ -1208,7 +1282,7 @@ cmd_frida() {
 
 usage() {
     cat <<'EOF'
-Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|launch|snapshot|capture|frida}
+Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|pull|launch|snapshot|capture|frida}
 
   setup    Install missing Arch/Debian/Ubuntu tools and build the image
   start    Boot redroid; give hci0 to Android unless --no-bt (or BT_ENABLE=0)
@@ -1217,6 +1291,7 @@ Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|launch|snapshot
   status   Show container, host Bluetooth, Android, ABI, and capture status
   logs     Collect container and Android Bluetooth diagnostics
   install  Install an APK, several split APKs, or a directory of splits
+  pull     pull <package> [--apktool] [--jadx]: extract APKs and optionally decode
   launch   Start an installed app by package name
   snapshot snapshot save|restore <name>: copy stopped Android data, then restart
   capture  capture start [--no-mitm] | stop | status: pcap + decoded HTTPS
@@ -1233,6 +1308,7 @@ case ${1:-} in
     status) cmd_status ;;
     logs) cmd_logs ;;
     install) shift; cmd_install "$@" ;;
+    pull) shift; cmd_pull "$@" ;;
     launch) shift; cmd_launch "$@" ;;
     snapshot) shift; cmd_snapshot "$@" ;;
     capture) shift; cmd_capture "$@" ;;

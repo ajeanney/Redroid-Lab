@@ -18,6 +18,7 @@ similaires.
 | Capture de paquets réseau (pcap + HTTPS décodé) et installation d'APK | Disponible |
 | Investigation d'applications avec root : hooking Frida et contournement du SSL pinning | Disponible |
 | Instantanés nommés des données Android pour retrouver un état reproductible | Disponible |
+| Extraction des APK installés et de leurs fragments, avec analyse apktool/jadx optionnelle | Disponible |
 
 Les lignes « Prévu » sont des objectifs ; aucune n'est encore implémentée.
 
@@ -85,6 +86,7 @@ Android ne peuvent pas le posséder en même temps.
 - pour le passthrough Bluetooth uniquement : un contrôleur exposé en `hciN` (tout fabricant ; `btusb` pour la réinitialisation de secours)
 - pour la capture : `tcpdump`, `mitmproxy`, `editcap` de Wireshark et `nsenter` ; `setup` les installe sur Arch, Debian et Ubuntu, et `capture start` a besoin de `sudo` pour tcpdump
 - pour Frida : `curl` et `xz` (installés par `setup`) ; `frida unpin`/`exec` utilisent `uvx` d'`uv` pour lancer le client hôte correspondant, sauf si une version déjà installée correspond à la version épinglée
+- pour l'analyse statique optionnelle : les commandes hôte `apktool` et/ou `jadx`, avec leur environnement Java ; installez-les séparément, car `setup` ne les installe pas
 - environ 10 Go d'espace libre pour les images, les entrées de compilation et le cache
 - un accès HTTPS sortant pendant la compilation initiale
 
@@ -175,6 +177,7 @@ l'alimentation de l'adaptateur.
 | `./redroid.sh status` | Affiche l'état du conteneur, d'Android, de l'ABI, de BlueZ et de btlinux |
 | `./redroid.sh logs` | Affiche les diagnostics Bluetooth et enregistre les données HCI snoop quand elles existent |
 | `./redroid.sh install <apk\|dossier>...` | Installe un APK, plusieurs APK découpés, ou un dossier de fragments (`base.apk` + `split_config.*.apk`) |
+| `./redroid.sh pull <paquet> [--apktool] [--jadx]` | Extrait les APK installés et leurs fragments ; décode les ressources/smali ou décompile le code Java en option |
 | `./redroid.sh launch <paquet>` | Lance une application installée sans interface (à suivre avec `screen`) |
 | `./redroid.sh snapshot save\|restore <nom>` | Sauvegarde ou remplace les données Android conteneur arrêté ; le redémarre s'il tournait auparavant |
 | `./redroid.sh capture start [--no-mitm]` | Enregistre tout le trafic du conteneur dans `captures/<horodatage UTC>/` |
@@ -198,6 +201,7 @@ Les valeurs par défaut sont dans `redroid.env` :
 - port Frida redirigé vers l'hôte (`FRIDA_PORT`, loopback uniquement)
 - dossier des données persistantes
 - dossier des instantanés (`SNAPSHOT_DIR`, `./snapshots` par défaut)
+- dossier d'extraction des APK (`PULL_DIR`, `./apps` par défaut)
 - résolution d'affichage, densité et fréquence d'images
 - réglages du GPU et du native-bridge
 - délai de démarrage et chemin du namespace réseau de l'hôte
@@ -216,6 +220,39 @@ Utilisez la même configuration pour chaque commande de cycle de vie.
 Les données Android persistent dans `data/`. Installez des applications avec
 `./redroid.sh install /chemin/vers/application.apk` (ou un dossier d'APK découpés).
 Aucun service Google ni Play Store n'est inclus.
+
+## Extraction d'applications et analyse statique
+
+```sh
+./redroid.sh pull com.exemple.appli
+./redroid.sh pull com.exemple.appli --apktool --jadx
+```
+
+`pull` interroge Android avec `pm path` et copie chaque APK installé du paquet
+dans un nouveau dossier privé `apps/<paquet>/<horodatage UTC>-<suffixe aléatoire>/`.
+Les noms d'origine sont conservés, fragments compris ; le dossier complet peut
+être passé à `./redroid.sh install <dossier>`. Chaque exécution crée un dossier
+distinct et préserve les extractions précédentes. Seuls les APK installés sont
+copiés, pas les bases de données, préférences ou modules à la demande absents.
+
+Les outils hôte optionnels doivent déjà être dans le `PATH`. Avec `--apktool`,
+[Apktool](https://apktool.org/docs/cli-parameters/) décode chaque APK dans
+`apktool/<nom du fichier APK sans .apk>/`. Avec `--jadx`,
+[JADX](https://github.com/skylot/jadx#usage) reçoit l'APK et tous les fragments
+ensemble et écrit dans `jadx/`. Les deux options sont combinables. Le verrou du
+cycle de vie est pris pendant l'extraction et libéré avant l'analyse.
+
+Un outil manquant provoque un échec avant l'extraction. Les échecs de copie
+renvoient un code non nul et laissent les fichiers incomplets sous le nom
+`*.apk.part` ; ne réinstallez pas une extraction incomplète. Les échecs d'analyse
+renvoient aussi un code non nul et conservent les APK extraits ainsi que les
+résultats d'analyse pour inspection. Quand les deux outils sont demandés,
+chacun est exécuté même si l'autre signale des erreurs.
+
+`PULL_DIR` choisit le dossier racine ; les chemins relatifs partent du dépôt.
+Les configurations locales existantes héritent de la valeur par défaut fournie.
+`apps/` est exclu de Git et du contexte Docker, sources et ressources décodées
+comprises ; excluez vous-même les emplacements personnalisés.
 
 ## Instantanés
 

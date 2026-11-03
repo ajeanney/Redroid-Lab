@@ -3,6 +3,9 @@
 /snapshots/
 /.redroid-restore.*/
 
+# Pulled APKs and decoded application sources/resources
+/apps/
+
 # Packet capture sessions (pcaps, decoded flows, TLS keys)
 /captures/
 
