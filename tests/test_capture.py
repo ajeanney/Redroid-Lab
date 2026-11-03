@@ -97,7 +97,11 @@ elif cmd == "adb":
     if args[0] == "connect" or "push" in args:
         sys.exit(0)
     shell = shlex.split(" ".join(args[3:]))
-    if shell[:3] == ["settings", "get", "global"]:
+    if shell[:3] == ["pm", "list", "packages"]:
+        if fault != "missing-app":
+            print("package:com.example.app.extra uid:10002")
+            print("package:com.example.app uid:" + ("bad" if fault == "bad-uid" else "10123"))
+    elif shell[:3] == ["settings", "get", "global"]:
         print(state()["proxy"])
     elif shell[:3] == ["settings", "put", "global"]:
         if fault in ("restore", "offline") and shell[4] != ":0":
@@ -210,6 +214,25 @@ class CaptureTests(unittest.TestCase):
                 self.assertNotIn("redirect to", self.state()["rules"])
             self.run_capture("stop")
             self.assertEqual(self.state()["proxy"], "old.proxy:8888")
+
+    def test_app_scopes_redirect_and_quic_but_keeps_full_pcap(self):
+        self.run_capture("start", "--transparent", "--app", "com.example.app")
+        session = self.session()
+        self.assertEqual((session / "app.uid").read_text().strip(), "10123")
+        rules = self.state()["rules"]
+        self.assertIn("quic meta skuid 10123 udp dport 443 drop", rules)
+        self.assertIn("output meta skuid 10123 tcp dport", rules)
+        self.assertNotIn("skuid", next(e for e in self.events() if e[0] == "tcpdump"))
+        self.run_capture("stop")
+
+    def test_bad_app_options_and_uid_fail_before_capture(self):
+        for flags in (("--app",), ("--app", "com.example.app"),
+                      ("--transparent", "--app", "../escape")):
+            self.run_capture("start", *flags, ok=False)
+        for fault in ("missing-app", "bad-uid"):
+            self.run_capture("start", "--transparent", "--app", "com.example.app", fault=fault, ok=False)
+        self.assertFalse((self.root / ".runtime/capture.current").exists())
+        self.assertFalse(any(e[0] == "sudo" for e in self.events()))
 
     def test_install_failure_rolls_back_proxy_and_processes(self):
         self.run_capture("start", "--transparent", fault="install", ok=False)

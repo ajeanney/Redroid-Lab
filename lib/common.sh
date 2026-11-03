@@ -26,6 +26,24 @@ valid_port() {
     [[ $1 =~ ^[1-9][0-9]{0,4}$ ]] && (( $1 <= 65535 ))
 }
 
+validate_package() {
+    [[ $1 =~ ^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$ ]] || \
+        die "invalid Android package name: $1"
+}
+
+# Resolve the exact installed package for Android user 0, not a substring match.
+app_uid() {
+    local package=$1 uid
+    validate_package "$package"
+    uid=$(adb_shell pm list packages -U --user 0 "$package" | tr -d '\r' | \
+        awk -v package="package:$package" '$1 == package && $2 ~ /^uid:/ {sub(/^uid:/, "", $2); print $2}') || \
+        die "could not query UID for $package"
+    if [[ ! $uid =~ ^(0|[1-9][0-9]{0,9})$ ]] || (( uid >= 4294967295 )); then
+        die "package is missing or has an invalid UID: $package"
+    fi
+    printf '%s\n' "$uid"
+}
+
 load_config() {
     [[ -r $CONFIG_FILE ]] || die "configuration not found: $CONFIG_FILE"
     # shellcheck disable=SC1090

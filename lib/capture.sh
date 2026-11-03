@@ -90,7 +90,10 @@ capture_netns_exec() {
 }
 
 capture_install_rules() {
-    local sess=$1 port=${2:-} tables
+    local sess=$1 port=${2:-} tables uid_match=''
+    if [[ -r $sess/app.uid ]]; then
+        uid_match="meta skuid $(<"$sess/app.uid") "
+    fi
     tables=$(capture_netns_exec "$sess" nft list tables) || die "cannot inspect capture namespace"
     ! grep -Fxq "table inet $CAPTURE_NFT_TABLE" <<<"$tables" || \
         die "capture nftables table already exists: $CAPTURE_NFT_TABLE"
@@ -99,7 +102,7 @@ capture_install_rules() {
         cat <<EOF
 create table inet $CAPTURE_NFT_TABLE { comment "redroid-capture-${sess##*/}"; }
 add chain inet $CAPTURE_NFT_TABLE quic { type filter hook output priority -120; policy accept; }
-add rule inet $CAPTURE_NFT_TABLE quic udp dport 443 drop
+add rule inet $CAPTURE_NFT_TABLE quic ${uid_match}udp dport 443 drop
 EOF
         if [[ -n $port ]]; then
             cat <<EOF
@@ -107,7 +110,7 @@ add chain inet $CAPTURE_NFT_TABLE output { type nat hook output priority -110; p
 add rule inet $CAPTURE_NFT_TABLE output meta skgid $MITM_GID return
 add rule inet $CAPTURE_NFT_TABLE output ip daddr 127.0.0.0/8 return
 add rule inet $CAPTURE_NFT_TABLE output ip6 daddr ::1 return
-add rule inet $CAPTURE_NFT_TABLE output tcp dport { 80, 443 } redirect to :$port
+add rule inet $CAPTURE_NFT_TABLE output ${uid_match}tcp dport { 80, 443 } redirect to :$port
 EOF
         fi
     } | capture_netns_exec "$sess" nft -f -
@@ -223,14 +226,21 @@ capture_start_mitm() {
 }
 
 capture_start() {
-    local use_mitm=1 mode=regular sess netns_pid
-    [[ $# -le 1 ]] || die "usage: $0 capture start [--no-mitm|--transparent]"
-    case ${1:-} in
-        '') ;;
-        --no-mitm) use_mitm=0 ;;
-        --transparent) mode=transparent ;;
-        *) die "usage: $0 capture start [--no-mitm|--transparent]" ;;
-    esac
+    local use_mitm=1 mode=regular sess netns_pid package='' uid=''
+    while (( $# )); do
+        case $1 in
+            --no-mitm) use_mitm=0 ;;
+            --transparent) mode=transparent ;;
+            --app)
+                [[ $# -ge 2 && -z $package ]] || die "--app requires one package"
+                package=$2; validate_package "$package"; shift
+                ;;
+            *) die "usage: $0 capture start [--no-mitm|--transparent] [--app <package>]" ;;
+        esac
+        shift
+    done
+    [[ $use_mitm == 1 || $mode != transparent ]] || die "--no-mitm and --transparent cannot be combined"
+    [[ -z $package || $mode == transparent ]] || die "--app requires --transparent"
     need tcpdump nsenter timeout
     [[ $use_mitm == 0 ]] || need mitmdump openssl nft lsns
     if [[ $mode == transparent ]]; then
@@ -240,10 +250,20 @@ capture_start() {
     require_running
     capture_active && die "a capture is already running ($(<"$CAPTURE_CURRENT")); run '$0 capture stop'"
 
+    if [[ -n $package ]]; then
+        need adb
+        adb_connect
+        uid=$(app_uid "$package")
+    fi
     umask 077
     sess=$(stamped_dir "$CAPTURE_DIR")
     printf '%s\n' "$sess" >"$CAPTURE_CURRENT"
     trap_exit capture_start_abort
+    if [[ -n $package ]]; then
+        printf '%s\n' "$package" >"$sess/app.package"
+        printf '%s\n' "$uid" >"$sess/app.uid"
+        note "Proxying $package (UID $uid); pcap still includes all apps"
+    fi
     note "Capture session: $sess"
 
     sudo -v

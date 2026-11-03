@@ -362,6 +362,19 @@ protocols remain raw in the pcap. Existing connections must be
 reopened. `--no-mitm` and `--transparent` cannot be combined; raw mode changes
 neither the proxy nor firewall.
 
+
+To proxy a single installed app (Android user 0):
+
+```sh
+./redroid.sh capture start --transparent --app com.example.app
+```
+
+The exact package UID is recorded in `app.package`/`app.uid`. TCP redirection
+and QUIC blocking match only that UID; `flows.mitm` excludes other UIDs.
+The pcap still records all traffic. Packages sharing a UID are inseparable;
+isolated processes and traffic delegated to other UIDs are outside this filter.
+`--app` requires `--transparent`.
+
 `tcpdump` runs as root through `sudo` and then drops privileges to the invoking
 user, so artifacts are user-owned. Captures contain decrypted credentials and
 personal data: keep `captures/` private.

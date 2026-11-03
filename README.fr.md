@@ -373,6 +373,19 @@ non standards et les protocoles non HTTP restent bruts dans le pcap. Les
 connexions déjà ouvertes doivent être recréées. `--no-mitm` et `--transparent`
 sont incompatibles ; le mode brut ne modifie ni proxy ni pare-feu.
 
+
+Pour ne proxifier qu’une application installée (utilisateur Android 0) :
+
+```sh
+./redroid.sh capture start --transparent --app com.exemple.appli
+```
+
+Le paquet et son UID exact sont conservés dans `app.package`/`app.uid`.
+La redirection TCP et le blocage QUIC ciblent cet UID ; `flows.mitm` exclut les
+autres UID. Le pcap garde tout le trafic. Les paquets partageant un UID restent
+indissociables ; les processus isolés et les requêtes déléguées à d’autres UID
+échappent au filtre. `--app` exige `--transparent`.
+
 `tcpdump` tourne en root via `sudo` puis abandonne ses privilèges au profit de
 l'utilisateur appelant : les artefacts lui appartiennent. Les captures
 contiennent des identifiants et des données personnelles déchiffrés : gardez

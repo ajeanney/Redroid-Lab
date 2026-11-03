@@ -27,8 +27,7 @@ cmd_pull() {
     local -A names=()
     [[ $# -gt 0 ]] || die "usage: $0 pull <package> [--apktool] [--jadx]"
     shift
-    [[ $package =~ ^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$ ]] || \
-        die "invalid Android package name: $package"
+    validate_package "$package"
     for option; do
         case $option in
             --apktool) use_apktool=1 ;;
