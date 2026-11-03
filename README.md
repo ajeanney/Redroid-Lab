@@ -14,7 +14,7 @@ inspection, and similar reverse-engineering workflows.
 | ARM64 application translation (`libndk_translation`) | Available |
 | Physical Bluetooth passthrough (AOSP Linux-HCI HAL) | Available |
 | Optional Bluetooth: run without it via `start --no-bt` | Available |
-| Network packet capture (pcap + decoded HTTPS) and APK install | Available |
+| Network packet capture (pcap + decoded HTTPS), transparent proxying and APK install | Available |
 | Root-based app investigation: Frida hooking and SSL-pinning bypass | Available |
 | Named snapshots of Android data for repeatable app states | Available |
 | Pull installed APKs and splits, with optional apktool/jadx analysis | Available |
@@ -67,6 +67,7 @@ ADB/scrcpy ── 127.0.0.1:5555 only
 
 capture: tcpdump (container netns) ── full.pcap
          mitmproxy (Docker gateway) ◄── Android global proxy ── flows.mitm
+transparent: nftables OUTPUT redirect ── mitmproxy (container netns) ── flows.mitm
 ```
 
 Android stays in Docker's network namespace, preventing `netd` from modifying
@@ -175,7 +176,7 @@ and restores the host's previous BlueZ and adapter power state.
 | `./redroid.sh pull <package> [--apktool] [--jadx]` | Extract installed APKs and splits; optionally decode resources/smali or decompile Java sources |
 | `./redroid.sh launch <package>` | Start an installed app headlessly (then watch it with `screen`) |
 | `./redroid.sh snapshot save\|restore <name>` | Save or replace Android data while the container is stopped; restart it if it was running |
-| `./redroid.sh capture start [--no-mitm]` | Record all container traffic to `captures/<UTC timestamp>/` |
+| `./redroid.sh capture start [--no-mitm\|--transparent]` | Record all container traffic to `captures/<UTC timestamp>-<random suffix>/` |
 | `./redroid.sh capture stop` / `status` | End the session and write the artifacts / show the active session |
 | `./redroid.sh frida start` / `stop` | Push and run `frida-server` as root in the guest, forwarded to the host loopback / stop it |
 | `./redroid.sh frida unpin <package>` | Spawn an app with Java-layer SSL-pinning bypassed, so `capture` can decode its HTTPS |
@@ -192,6 +193,7 @@ Defaults are in `redroid.env`:
 - container name and loopback ADB port
 - Bluetooth adapter, expected USB ID, and `BT_ENABLE` (default `1`)
 - capture directory (`CAPTURE_DIR`) and preferred mitmproxy port (`MITM_PORT`)
+- transparent capture table (`CAPTURE_NFT_TABLE`) and proxy-only group (`MITM_GID`)
 - host-forwarded Frida port (`FRIDA_PORT`, loopback only)
 - persistent data directory
 - snapshot directory (`SNAPSHOT_DIR`, default `./snapshots`)
@@ -300,7 +302,7 @@ unless they set `SNAPSHOT_DIR` themselves.
 ./redroid.sh capture stop
 ```
 
-Each session is written to `captures/<UTC timestamp>/` (ignored by Git):
+Each session is written to `captures/<UTC timestamp>-<random suffix>/` (ignored by Git):
 
 | File | Content |
 | --- | --- |
@@ -309,14 +311,54 @@ Each session is written to `captures/<UTC timestamp>/` (ignored by Git):
 | `sslkeylog.txt` | TLS session keys from mitmproxy |
 | `full-decrypted.pcapng` | `full.pcap` with the keys injected, so Wireshark decrypts the proxied HTTPS |
 
-How it works: mitmproxy listens on the container's Docker gateway address (it
-tries the next port if `MITM_PORT` is busy), the mitmproxy CA is copied into
-Android's system and conscrypt trust stores, and Android's global `http_proxy` is
-pointed at the proxy. Only traffic from proxy-aware apps is decoded; everything
-else, including non-HTTP protocols, is still in the pcap in raw form. Apps that
-pin certificates or ignore the system proxy will show up only in the pcap. The
-CA is copied again at each `capture start`, and the proxy setting is cleared at
-`capture stop` (also done by `stop`).
+By default, mitmproxy listens on the Docker gateway and Android's global
+`http_proxy` points at it. The mitmproxy CA is copied into the guest's system
+and conscrypt trust stores each time a capture starts.
+
+To also intercept apps that ignore the system proxy:
+
+```sh
+./redroid.sh capture start --transparent
+# ... restart the app to open fresh connections ...
+./redroid.sh capture stop
+```
+
+This mode runs mitmproxy inside the container's network namespace as the calling
+user, with capabilities dropped and a dedicated socket group (`MITM_GID`,
+`2147483647` by default). A session-owned nftables table (`CAPTURE_NFT_TABLE`,
+`redroid_capture` by default) redirects new IPv4/IPv6 TCP connections on ports
+80 and 443 to the proxy's loopback listeners. Proxy traffic and loopback
+destinations are excluded to avoid loops. No system proxy configuration is
+required; it is temporarily disabled, and its previous value is restored on
+stop, as it is in explicit proxy mode. The reserved group must remain unused
+by Android.
+
+Run this command as your normal host user; it requests sudo only for namespace,
+firewall and module operations.
+
+Rules stay in Android's namespace; host nftables rules, routes and forwarding
+settings are unchanged. The host's `nft_redir` module is loaded if necessary
+and unloaded on stop only if this capture introduced it. The proxy uses host
+files but does not enter the host network namespace. This mode requires
+util-linux's `setpriv` and `lsns`, kmod's `modprobe`/`rmmod`, kernel nftables
+NAT/redirect support, and a mitmproxy version supporting multiple `--mode`
+listeners.
+
+Namespace identity and table name/ownership are saved with the session. Stop
+removes the table before terminating the proxy; `stop`, snapshots and failed
+capture startup all use the same cleanup path. If cleanup fails, capture state
+is retained: correct the error and retry `capture stop`. Preexisting tables are
+never overwritten or deleted.
+
+If Android has already stopped, cleanup still releases the capture processes
+and firewall state. Its saved proxy cannot be restored through ADB while it is
+offline; the previous value is kept in `proxy.before` for manual recovery.
+
+Transparent capture does not bypass certificate pinning or app-specific CA
+stores; use Frida where needed. QUIC/HTTP3 (UDP/443), nonstandard ports and
+non-HTTP protocols remain raw in the pcap. Existing connections must be
+reopened. `--no-mitm` and `--transparent` cannot be combined; raw mode changes
+neither the proxy nor firewall.
 
 `tcpdump` runs as root through `sudo` and then drops privileges to the invoking
 user, so artifacts are user-owned. Captures contain decrypted credentials and

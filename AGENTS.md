@@ -8,7 +8,7 @@ If `AGENTS.local.md` (or any `*.local.md` at the repo root) exists, read it befo
 
 ## Safety first (host-impacting project)
 
-`./redroid.sh start` stops and runtime-masks BlueZ, powers down `hci0`, starts a **privileged** container, and installs an nftables guard. `stop` reverses this. `start --no-bt` (or `BT_ENABLE=0`) skips every Bluetooth step and the host-netns mount; the state file records `BT_MANAGED` so `stop` only restores what was taken. `capture start` runs `tcpdump` through `sudo`+`nsenter`, runs `mitmdump` on the Docker gateway, writes the mitmproxy CA into the guest and sets its global `http_proxy`; `capture stop` (also run by `stop`) undoes all of it. `frida start` pushes and runs `frida-server` as **root in the guest** and forwards its port to the host loopback; `frida unpin` spawns an app with its SSL-pinning checks patched out so `capture` can decode it. Treat these as host-changing operations.
+`./redroid.sh start` stops and runtime-masks BlueZ, powers down `hci0`, starts a **privileged** container, and installs an nftables guard. `stop` reverses this. `start --no-bt` (or `BT_ENABLE=0`) skips every Bluetooth step and the host-netns mount; the state file records `BT_MANAGED` so `stop` only restores what was taken. `capture start` runs `tcpdump` through `sudo`+`nsenter`, runs `mitmdump` on the Docker gateway, writes the mitmproxy CA into the guest and temporarily changes its global `http_proxy`; `capture start --transparent` instead runs a restricted proxy inside the guest netns and installs a session-owned nftables redirect for TCP/80,443; `capture stop` (also run by `stop`) undoes all of it. `frida start` pushes and runs `frida-server` as **root in the guest** and forwards its port to the host loopback; `frida unpin` spawns an app with its SSL-pinning checks patched out so `capture` can decode it. Treat these as host-changing operations.
 
 Allowed without asking:
 - Read any file; `git status`, `git diff`, `git log`
@@ -31,17 +31,18 @@ Never:
 | Path | Purpose |
 | --- | --- |
 | `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `pull`, `launch`, `snapshot`, `capture`, `frida`. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
-| `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, APK/snapshot/capture directories, capture/Frida ports, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
+| `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, APK/snapshot/capture directories, capture/Frida ports, transparent table/group, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
 | `apps/` | Gitignored pulls (`<package>/<UTC timestamp>-<random suffix>/`): APKs/splits plus optional `apktool/` and `jadx/` output; set `PULL_DIR` to override |
 | `snapshots/` | Gitignored named copies of Android data (`<name>/data/`); `snapshot save\|restore <name>` stops the existing container and restarts it only if it was running |
 | `.redroid-restore.*/` | Private restore staging next to the data directory; previous data retained on restart failure |
-| `captures/` | Gitignored capture sessions (`full.pcap`, `flows.mitm`, `sslkeylog.txt`, `full-decrypted.pcapng`) |
+| `captures/` | Gitignored capture sessions (`full.pcap`, `flows.mitm`, `sslkeylog.txt`, `full-decrypted.pcapng`); transparent sessions also record `netns.id`, `redirect.table`, `module.loaded` and `proxy.before` for cleanup |
 | `frida/unpin.js` | Java-layer SSL-pinning bypass loaded by `frida unpin` |
 | `.cache/frida/` | Gitignored: downloaded, checksummed `frida-server` binaries |
 | `Dockerfile` | Overlay on the pinned redroid image; builds and installs the Bluetooth HAL |
 | `build-inputs.env` | Pinned source URLs and SHA-256 sums for the HAL build, plus the pinned Frida version/checksum |
 | `build/` | `build-bt-hal.sh` (also patches the HAL to read the HCI index from `ro.redroid.bt.hci`), `validate-runtime.sh`, `btlinux-service.cc`, the HAL `.rc`, `build-arm64-smoke-apk.sh` |
 | `tests/arm64-smoke-app/` | Source of the ARM64-only JNI smoke APK installed and removed by `start` |
+| `tests/test_capture.py` | Isolated explicit/raw/transparent capture lifecycle and rollback tests with fake host tools |
 | `tests/test_pull.py` | Isolated extraction, optional analysis and failure tests with fake ADB, apktool and jadx commands |
 | `tests/test_snapshot.py` | Isolated snapshot round-trip and failure tests with fake Docker, sudo and ADB commands |
 
@@ -55,6 +56,7 @@ File-scoped checks (preferred, no side effects):
 bash -n redroid.sh
 shellcheck redroid.sh            # also: shellcheck build/<file>.sh
 git diff --check
+python3 tests/test_capture.py    # fake namespaces/firewall/processes; no root or network
 python3 tests/test_pull.py       # temporary files and fake ADB/analysis tools
 python3 tests/test_snapshot.py   # temporary data and fake commands; no hardware or sudo
 ```
@@ -70,7 +72,7 @@ Runtime verification (needs approval, real hardware, Binder-capable kernel):
 ./redroid.sh start --no-bt && ./redroid.sh capture start   # no Bluetooth hardware needed
 ```
 
-Pull and snapshot tests cover file operations and mocked command/lifecycle failures. Hardware-dependent changes can only be verified by a human on a machine with a supported controller; say so instead of claiming verification.
+Capture, pull and snapshot tests cover file operations and mocked command/lifecycle failures. Hardware-dependent changes can only be verified by a human on a machine with a supported controller; say so instead of claiming verification.
 
 ## Code style
 
@@ -78,6 +80,7 @@ Pull and snapshot tests cover file operations and mocked command/lifecycle failu
 - Bash: `#!/usr/bin/env bash`, `set -Eeuo pipefail`, 4-space indent, quote every expansion, `[[ ]]` tests, `die`/`note`/`need` helpers for errors and progress
 - Keep ShellCheck clean; justify any `# shellcheck disable=` inline
 - Configuration belongs in `redroid.env` (add the key to the required-name list in `load_config`), never hardcoded in the script
+- Transparent capture must verify namespace identity after entry, reject the host netns, and delete only its own table. Cleanup failures must retain capture state for retry; only unload `nft_redir` if this capture loaded it.
 - Fail closed: every host mutation needs a matching restore path in `restore_host_state`/`rollback_start`, and `stop` must stay idempotent
 - New tools (capture, root inspection, ...) go in separate subcommands or scripts; do not grow `cmd_start` and do not weaken its validations
 - Pin every downloaded input with a checksum in `build-inputs.env`; no floating tags or `latest`

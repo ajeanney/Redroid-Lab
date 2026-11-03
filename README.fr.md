@@ -15,7 +15,7 @@ similaires.
 | Traduction des applications ARM64 (`libndk_translation`) | Disponible |
 | Bluetooth physique en passthrough (HAL Linux-HCI d'AOSP) | Disponible |
 | Bluetooth optionnel : démarrage sans lui avec `start --no-bt` | Disponible |
-| Capture de paquets réseau (pcap + HTTPS décodé) et installation d'APK | Disponible |
+| Capture de paquets réseau (pcap + HTTPS décodé), proxy transparent et installation d'APK | Disponible |
 | Investigation d'applications avec root : hooking Frida et contournement du SSL pinning | Disponible |
 | Instantanés nommés des données Android pour retrouver un état reproductible | Disponible |
 | Extraction des APK installés et de leurs fragments, avec analyse apktool/jadx optionnelle | Disponible |
@@ -70,6 +70,7 @@ ADB/scrcpy ── 127.0.0.1:5555 only
 
 capture: tcpdump (container netns) ── full.pcap
          mitmproxy (Docker gateway) ◄── Android global proxy ── flows.mitm
+transparent: nftables OUTPUT redirect ── mitmproxy (container netns) ── flows.mitm
 ```
 
 Android reste dans le namespace réseau de Docker, ce qui empêche `netd` de
@@ -180,7 +181,7 @@ l'alimentation de l'adaptateur.
 | `./redroid.sh pull <paquet> [--apktool] [--jadx]` | Extrait les APK installés et leurs fragments ; décode les ressources/smali ou décompile le code Java en option |
 | `./redroid.sh launch <paquet>` | Lance une application installée sans interface (à suivre avec `screen`) |
 | `./redroid.sh snapshot save\|restore <nom>` | Sauvegarde ou remplace les données Android conteneur arrêté ; le redémarre s'il tournait auparavant |
-| `./redroid.sh capture start [--no-mitm]` | Enregistre tout le trafic du conteneur dans `captures/<horodatage UTC>/` |
+| `./redroid.sh capture start [--no-mitm\|--transparent]` | Enregistre tout le trafic du conteneur dans `captures/<horodatage UTC>-<suffixe aléatoire>/` |
 | `./redroid.sh capture stop` / `status` | Termine la session et écrit les artefacts / affiche la session active |
 | `./redroid.sh frida start` / `stop` | Pousse et lance `frida-server` en root dans l'invité, redirigé vers la loopback de l'hôte / l'arrête |
 | `./redroid.sh frida unpin <paquet>` | Lance une application avec le SSL pinning Java contourné, pour que `capture` puisse décoder son HTTPS |
@@ -198,6 +199,7 @@ Les valeurs par défaut sont dans `redroid.env` :
 - nom du conteneur et port ADB de la loopback
 - adaptateur Bluetooth, identifiant USB attendu et `BT_ENABLE` (`1` par défaut)
 - dossier de capture (`CAPTURE_DIR`) et port mitmproxy préféré (`MITM_PORT`)
+- table de capture transparente (`CAPTURE_NFT_TABLE`) et groupe réservé au proxy (`MITM_GID`)
 - port Frida redirigé vers l'hôte (`FRIDA_PORT`, loopback uniquement)
 - dossier des données persistantes
 - dossier des instantanés (`SNAPSHOT_DIR`, `./snapshots` par défaut)
@@ -311,7 +313,7 @@ défaut fourni, sauf si elles définissent elles-mêmes `SNAPSHOT_DIR`.
 ./redroid.sh capture stop
 ```
 
-Chaque session est écrite dans `captures/<horodatage UTC>/` (ignoré par Git) :
+Chaque session est écrite dans `captures/<horodatage UTC>-<suffixe aléatoire>/` (ignoré par Git) :
 
 | Fichier | Contenu |
 | --- | --- |
@@ -320,15 +322,54 @@ Chaque session est écrite dans `captures/<horodatage UTC>/` (ignoré par Git) :
 | `sslkeylog.txt` | Clés de session TLS de mitmproxy |
 | `full-decrypted.pcapng` | `full.pcap` avec les clés injectées : Wireshark déchiffre l'HTTPS passé par le proxy |
 
-Fonctionnement : mitmproxy écoute sur l'adresse de la passerelle Docker du
-conteneur (il essaie le port suivant si `MITM_PORT` est occupé), le certificat CA
-de mitmproxy est copié dans les magasins de confiance système et conscrypt
-d'Android, et le `http_proxy` global d'Android pointe vers le proxy. Seul le
-trafic des applications qui respectent le proxy est décodé ; tout le reste, y
-compris les protocoles non HTTP, reste dans le pcap sous forme brute. Les
-applications qui épinglent leurs certificats ou ignorent le proxy système
-n'apparaissent que dans le pcap. Le CA est recopié à chaque `capture start`, et
-le réglage du proxy est effacé à `capture stop` (fait aussi par `stop`).
+Par défaut, mitmproxy écoute sur la passerelle Docker et le `http_proxy` global
+d'Android pointe vers lui. Le CA de mitmproxy est copié dans les magasins de
+confiance système et conscrypt de l'invité à chaque démarrage de capture.
+
+Pour intercepter aussi les applications qui ignorent le proxy système :
+
+```sh
+./redroid.sh capture start --transparent
+# ... relancez l'application pour ouvrir de nouvelles connexions ...
+./redroid.sh capture stop
+```
+
+Ce mode lance mitmproxy dans le namespace réseau du conteneur, sous l'utilisateur
+appelant, avec les capacités supprimées et un groupe de sockets réservé
+(`MITM_GID`, `2147483647` par défaut). Une table nftables propre à la session
+(`CAPTURE_NFT_TABLE`, `redroid_capture` par défaut) redirige les nouvelles
+connexions TCP IPv4/IPv6 vers les ports 80 et 443 vers les écouteurs loopback du
+proxy. Le trafic du proxy et les destinations loopback sont exclus pour éviter
+les boucles. Aucun réglage du proxy système n'est requis ; il est temporairement
+désactivé puis sa valeur précédente est restaurée à l'arrêt, comme en mode
+proxy explicite. Le groupe réservé doit rester inutilisé par Android.
+
+Lancez cette commande sous votre utilisateur habituel ; elle utilise sudo
+seulement pour les opérations sur le namespace, le pare-feu et le module.
+
+Les règles restent dans le namespace Android ; les règles nftables de l'hôte,
+les routes et les paramètres de forwarding ne sont pas modifiés. Le module
+hôte `nft_redir` est chargé si nécessaire, puis déchargé à l'arrêt seulement si
+la capture l'a introduit. Le proxy utilise les fichiers de l'hôte mais n'entre
+pas dans son namespace réseau. Ce mode exige `setpriv` et `lsns` d'util-linux,
+`modprobe`/`rmmod` de kmod, le support noyau nftables NAT/redirect et une version
+de mitmproxy acceptant plusieurs écouteurs `--mode`.
+
+L'identité du namespace et le nom/propriétaire de la table sont conservés dans
+la session. L'arrêt supprime la table avant de terminer le proxy ; `stop`,
+les instantanés et le rollback de démarrage de capture utilisent ce même chemin.
+Si le nettoyage échoue, l'état de capture est conservé : corrigez l'erreur et
+relancez `capture stop`. Aucune table préexistante n'est écrasée ni supprimée.
+
+Si Android est déjà arrêté, le nettoyage libère quand même les processus et
+les règles de capture. Son proxy ne peut pas être restauré par ADB hors ligne ;
+la valeur précédente reste dans `proxy.before` pour une récupération manuelle.
+
+Ce mode ne contourne pas le pinning ni les magasins de CA propres aux
+applications : utilisez Frida si nécessaire. QUIC/HTTP3 (UDP/443), les ports
+non standards et les protocoles non HTTP restent bruts dans le pcap. Les
+connexions déjà ouvertes doivent être recréées. `--no-mitm` et `--transparent`
+sont incompatibles ; le mode brut ne modifie ni proxy ni pare-feu.
 
 `tcpdump` tourne en root via `sudo` puis abandonne ses privilèges au profit de
 l'utilisateur appelant : les artefacts lui appartiennent. Les captures
