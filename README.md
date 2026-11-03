@@ -16,6 +16,7 @@ inspection, and similar reverse-engineering workflows.
 | Optional Bluetooth: run without it via `start --no-bt` | Available |
 | Network packet capture (pcap + decoded HTTPS) and APK install | Available |
 | Root-based app investigation: Frida hooking and SSL-pinning bypass | Available |
+| Named snapshots of Android data for repeatable app states | Available |
 
 "Planned" rows are goals; none is implemented yet.
 
@@ -170,6 +171,7 @@ and restores the host's previous BlueZ and adapter power state.
 | `./redroid.sh logs` | Print Bluetooth diagnostics and save HCI snoop data when available |
 | `./redroid.sh install <apk\|dir>...` | Install one APK, several split APKs, or a directory of splits (`base.apk` + `split_config.*.apk`) |
 | `./redroid.sh launch <package>` | Start an installed app headlessly (then watch it with `screen`) |
+| `./redroid.sh snapshot save\|restore <name>` | Save or replace Android data while the container is stopped; restart it if it was running |
 | `./redroid.sh capture start [--no-mitm]` | Record all container traffic to `captures/<UTC timestamp>/` |
 | `./redroid.sh capture stop` / `status` | End the session and write the artifacts / show the active session |
 | `./redroid.sh frida start` / `stop` | Push and run `frida-server` as root in the guest, forwarded to the host loopback / stop it |
@@ -189,6 +191,7 @@ Defaults are in `redroid.env`:
 - capture directory (`CAPTURE_DIR`) and preferred mitmproxy port (`MITM_PORT`)
 - host-forwarded Frida port (`FRIDA_PORT`, loopback only)
 - persistent data directory
+- snapshot directory (`SNAPSHOT_DIR`, default `./snapshots`)
 - display resolution, density, and frame rate
 - GPU and native-bridge settings
 - startup timeout and host network-namespace path
@@ -207,6 +210,48 @@ Use the same configuration for every lifecycle command.
 Android data persists under `data/`. Install applications with
 `./redroid.sh install /path/to/application.apk` (or a directory of split APKs).
 No Google services or Play Store are included.
+
+## Snapshots
+
+```sh
+./redroid.sh snapshot save clean-app
+# ... install apps, sign in, change settings ...
+./redroid.sh snapshot restore clean-app
+```
+
+Snapshots copy the entire `REDROID_DATA_DIR` into `snapshots/<name>/data/`.
+Names start with a letter or digit and contain up to 64 letters, digits, dots,
+underscores or hyphens. Existing names are never overwritten. Use the same
+configuration and image when saving and restoring; snapshots contain only
+Android data, not the container image or its writable layer.
+
+Both commands hold the lifecycle lock, end any active packet capture and stop
+the existing container before copying. The container is restarted and Android
+boot is checked only if it was running beforehand. Its Bluetooth mode and host
+ownership state stay in place; capture and Frida sessions must be started again.
+Snapshots also work when Android is already stopped or the container is absent.
+
+Restore **replaces all current Android data**, including installed apps,
+credentials, settings and Bluetooth bonds. It stages the copy next to the data
+directory before swapping it into place; a failed copy leaves current data
+intact. Ownership, permissions, links and extended attributes are preserved via
+`sudo cp -a`, with copy-on-write copies where the filesystem supports them.
+Otherwise allow space for a full copy. Snapshot and data directories must not
+contain one another.
+
+If restarting after a completed restore fails, the command retains the previous
+data under `.redroid-restore.*/previous` next to `REDROID_DATA_DIR`. Run
+`./redroid.sh stop` to recover host ownership before investigating. A forced
+termination or power loss can also leave staging directories there or under
+`snapshots/.save-*`; inspect them before manual recovery or removal.
+
+Snapshots contain the same private app data and credentials as `data/`. The
+default `snapshots/` directory and restore staging directories are excluded from
+Git and the Docker build context; exclude custom locations yourself. Snapshot
+directories are created private to the calling user.
+
+Existing local configurations inherit the shipped snapshot directory default
+unless they set `SNAPSHOT_DIR` themselves.
 
 ## Packet capture
 

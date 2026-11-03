@@ -17,6 +17,7 @@ similaires.
 | Bluetooth optionnel : démarrage sans lui avec `start --no-bt` | Disponible |
 | Capture de paquets réseau (pcap + HTTPS décodé) et installation d'APK | Disponible |
 | Investigation d'applications avec root : hooking Frida et contournement du SSL pinning | Disponible |
+| Instantanés nommés des données Android pour retrouver un état reproductible | Disponible |
 
 Les lignes « Prévu » sont des objectifs ; aucune n'est encore implémentée.
 
@@ -175,6 +176,7 @@ l'alimentation de l'adaptateur.
 | `./redroid.sh logs` | Affiche les diagnostics Bluetooth et enregistre les données HCI snoop quand elles existent |
 | `./redroid.sh install <apk\|dossier>...` | Installe un APK, plusieurs APK découpés, ou un dossier de fragments (`base.apk` + `split_config.*.apk`) |
 | `./redroid.sh launch <paquet>` | Lance une application installée sans interface (à suivre avec `screen`) |
+| `./redroid.sh snapshot save\|restore <nom>` | Sauvegarde ou remplace les données Android conteneur arrêté ; le redémarre s'il tournait auparavant |
 | `./redroid.sh capture start [--no-mitm]` | Enregistre tout le trafic du conteneur dans `captures/<horodatage UTC>/` |
 | `./redroid.sh capture stop` / `status` | Termine la session et écrit les artefacts / affiche la session active |
 | `./redroid.sh frida start` / `stop` | Pousse et lance `frida-server` en root dans l'invité, redirigé vers la loopback de l'hôte / l'arrête |
@@ -195,6 +197,7 @@ Les valeurs par défaut sont dans `redroid.env` :
 - dossier de capture (`CAPTURE_DIR`) et port mitmproxy préféré (`MITM_PORT`)
 - port Frida redirigé vers l'hôte (`FRIDA_PORT`, loopback uniquement)
 - dossier des données persistantes
+- dossier des instantanés (`SNAPSHOT_DIR`, `./snapshots` par défaut)
 - résolution d'affichage, densité et fréquence d'images
 - réglages du GPU et du native-bridge
 - délai de démarrage et chemin du namespace réseau de l'hôte
@@ -213,6 +216,52 @@ Utilisez la même configuration pour chaque commande de cycle de vie.
 Les données Android persistent dans `data/`. Installez des applications avec
 `./redroid.sh install /chemin/vers/application.apk` (ou un dossier d'APK découpés).
 Aucun service Google ni Play Store n'est inclus.
+
+## Instantanés
+
+```sh
+./redroid.sh snapshot save appli-propre
+# ... installez des applications, connectez-vous, modifiez les réglages ...
+./redroid.sh snapshot restore appli-propre
+```
+
+Les instantanés copient tout `REDROID_DATA_DIR` dans `snapshots/<nom>/data/`.
+Les noms commencent par une lettre ou un chiffre et contiennent au plus 64
+lettres, chiffres, points, tirets bas ou tirets. Les noms existants ne sont
+jamais écrasés. Utilisez la même configuration et la même image pour sauvegarder
+et restaurer ; seuls les fichiers de données Android sont conservés, pas
+l'image ni la couche modifiable du conteneur.
+
+Les deux commandes prennent le verrou du cycle de vie, terminent toute capture
+en cours et arrêtent le conteneur existant avant la copie. Le conteneur n'est
+redémarré et le boot Android vérifié que s'il tournait auparavant. Son mode
+Bluetooth et l'état de réservation de l'hôte sont conservés ; les sessions de
+capture et Frida doivent être relancées. Les instantanés fonctionnent aussi si
+Android est déjà arrêté ou si le conteneur est absent.
+
+La restauration **remplace toutes les données Android courantes**, applications,
+identifiants, réglages et appairages Bluetooth compris. Elle prépare la copie à
+côté du dossier de données avant de l'échanger ; un échec de copie préserve les
+données courantes. Propriétaires, permissions, liens et attributs étendus sont
+conservés avec `sudo cp -a`, en utilisant la copie sur écriture si le système de
+fichiers le permet. Sinon, prévoyez la place pour une copie complète. Les dossiers
+d'instantanés et de données ne doivent pas être imbriqués.
+
+Si le redémarrage après une restauration terminée échoue, la commande conserve les données
+précédentes dans `.redroid-restore.*/previous` à côté de `REDROID_DATA_DIR`.
+Lancez `./redroid.sh stop` pour rendre les ressources à l'hôte avant
+d'enquêter. Une interruption forcée ou une coupure peut aussi laisser des
+dossiers temporaires à cet endroit ou dans `snapshots/.save-*` ; inspectez-les
+avant toute récupération ou suppression manuelle.
+
+Les instantanés contiennent les mêmes données privées et identifiants que
+`data/`. Le dossier `snapshots/` par défaut et les dossiers temporaires de
+restauration sont exclus de Git et du contexte Docker ; excluez vous-même les
+emplacements personnalisés. Les dossiers d'instantanés créés ne sont accessibles
+qu'à l'utilisateur appelant.
+
+Les configurations locales existantes héritent du dossier d'instantanés par
+défaut fourni, sauf si elles définissent elles-mêmes `SNAPSHOT_DIR`.
 
 ## Capture de paquets
 

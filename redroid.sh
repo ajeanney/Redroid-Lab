@@ -25,12 +25,17 @@ load_config() {
     [[ -r $CONFIG_FILE ]] || die "configuration not found: $CONFIG_FILE"
     # shellcheck disable=SC1090
     source "$CONFIG_FILE"
+    # Existing local configurations predate snapshots; inherit the shipped default.
+    if [[ ! -v SNAPSHOT_DIR ]]; then
+        # shellcheck disable=SC1091
+        SNAPSHOT_DIR=$(source "$SCRIPT_DIR/redroid.env"; printf '%s' "$SNAPSHOT_DIR")
+    fi
 
     local name
     for name in BASE_IMAGE LOCAL_IMAGE CONTAINER_NAME ADB_HOST ADB_PORT \
         BT_ADAPTER NFT_TABLE REDROID_DATA_DIR REDROID_WIDTH REDROID_HEIGHT \
         REDROID_DPI REDROID_FPS REDROID_GPU_MODE REDROID_NATIVE_BRIDGE \
-        HOST_NETNS_SOURCE BOOT_TIMEOUT BT_ENABLE CAPTURE_DIR MITM_PORT FRIDA_PORT; do
+        HOST_NETNS_SOURCE BOOT_TIMEOUT BT_ENABLE CAPTURE_DIR MITM_PORT FRIDA_PORT SNAPSHOT_DIR; do
         [[ -n ${!name:-} ]] || die "missing configuration value '$name'"
     done
     if [[ ! $ADB_PORT =~ ^[0-9]+$ ]] || (( ADB_PORT < 1 || ADB_PORT > 65535 )); then
@@ -53,6 +58,7 @@ load_config() {
         REDROID_DATA_DIR=$SCRIPT_DIR/$configured_data
     fi
     [[ $CAPTURE_DIR == /* ]] || CAPTURE_DIR=$SCRIPT_DIR/${CAPTURE_DIR#./}
+    [[ $SNAPSHOT_DIR == /* ]] || SNAPSHOT_DIR=$SCRIPT_DIR/${SNAPSHOT_DIR#./}
     ADB_SERIAL=$ADB_HOST:$ADB_PORT
 }
 
@@ -994,6 +1000,103 @@ cmd_launch() {
     adb_shell am start -n "$activity"
 }
 
+# Trap state is global because Bash unwinds function locals before EXIT on errors.
+snapshot_finish() {
+    local exit_code=$? recovered=1
+    trap - EXIT INT TERM
+    set +e
+    if [[ -n $SNAPSHOT_WORK && -d $SNAPSHOT_WORK/previous && ! -e $SNAPSHOT_DATA ]]; then
+        sudo mv -T -- "$SNAPSHOT_WORK/previous" "$SNAPSHOT_DATA" || recovered=0
+    fi
+    if [[ $SNAPSHOT_RESTART == 1 && $recovered == 1 ]]; then
+        note "Restarting redroid"
+        if ! docker start "$CONTAINER_NAME" >/dev/null || ! wait_for_android; then
+            echo "error: restart failed; run './redroid.sh stop' to recover the host" >&2
+            exit_code=1
+        fi
+    fi
+    if [[ $recovered == 0 || ( $exit_code != 0 && -n $SNAPSHOT_WORK && -d $SNAPSHOT_WORK/previous ) ]]; then
+        echo "error: previous Android data retained at $SNAPSHOT_WORK/previous" >&2
+        exit_code=1
+    elif [[ -n $SNAPSHOT_WORK ]]; then
+        sudo rm -rf -- "$SNAPSHOT_WORK" || exit_code=1
+    fi
+    exit "$exit_code"
+}
+
+cmd_snapshot() {
+    local action=${1:-} name=${2:-} tool snapshot_path mounted_data status containers
+    SNAPSHOT_WORK=''
+    SNAPSHOT_RESTART=0
+    [[ $# == 2 && ( $action == save || $action == restore ) ]] || \
+        die "usage: $0 snapshot {save|restore} <name>"
+    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || \
+        die "snapshot name must be 1-64 letters, digits, dots, underscores or hyphens, starting with a letter or digit"
+    for tool in docker adb sudo flock cp mv mktemp realpath; do need "$tool"; done
+    acquire_lock
+    docker info >/dev/null 2>&1 || die "Docker daemon is unavailable"
+    [[ -d $REDROID_DATA_DIR ]] || die "Android data directory is missing: $REDROID_DATA_DIR"
+    SNAPSHOT_DATA=$(realpath -e -- "$REDROID_DATA_DIR")
+    SNAPSHOT_DIR=$(realpath -m -- "$SNAPSHOT_DIR")
+    [[ $SNAPSHOT_DATA != / && $SNAPSHOT_DIR != / && $SNAPSHOT_DIR != "$SNAPSHOT_DATA" && \
+       $SNAPSHOT_DIR != "$SNAPSHOT_DATA/"* && $SNAPSHOT_DATA != "$SNAPSHOT_DIR/"* ]] || \
+        die "snapshot and Android data directories must be separate, non-nested directories"
+    [[ $SCRIPT_DIR != "$SNAPSHOT_DATA" && $SCRIPT_DIR != "$SNAPSHOT_DATA/"* ]] || \
+        die "Android data directory must not contain the toolbox itself"
+    snapshot_path=$SNAPSHOT_DIR/$name
+    if [[ $action == save ]]; then
+        [[ ! -e $snapshot_path && ! -L $snapshot_path ]] || die "snapshot already exists: $name"
+    else
+        [[ -d $snapshot_path/data && ! -L $snapshot_path && ! -L $snapshot_path/data ]] || \
+            die "snapshot not found or invalid: $name"
+    fi
+    # Unlike inspect's "not found" exit code, a listing failure must abort the copy.
+    containers=$(docker container ls --all --format '{{.Names}}')
+    if grep -Fxq -- "$CONTAINER_NAME" <<<"$containers"; then
+        mounted_data=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$CONTAINER_NAME")
+        [[ -n $mounted_data && $(realpath -e -- "$mounted_data") == "$SNAPSHOT_DATA" ]] || \
+            die "container /data does not match REDROID_DATA_DIR"
+        status=$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME")
+        case $status in
+            running)
+                [[ -r $STATE_FILE ]] || die "running container has no lifecycle state; stop it before continuing"
+                SNAPSHOT_RESTART=1
+                ;;
+            exited|created) ;;
+            *) die "container must be running or stopped, not '$status'" ;;
+        esac
+    fi
+
+    umask 077
+    sudo -v
+    trap snapshot_finish EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    capture_stop_active
+    if [[ $SNAPSHOT_RESTART == 1 ]]; then
+        frida_forget
+        note "Stopping Android for snapshot $action"
+        docker stop --time 20 "$CONTAINER_NAME" >/dev/null
+        [[ $(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME") == exited ]] || \
+            die "container did not stop"
+    fi
+    if [[ $action == save ]]; then
+        mkdir -p -- "$SNAPSHOT_DIR"
+        SNAPSHOT_WORK=$(mktemp -d "$SNAPSHOT_DIR/.save-$name.XXXXXX")
+        sudo cp -a --reflink=auto --sparse=always -- "$SNAPSHOT_DATA" "$SNAPSHOT_WORK/data"
+        mv -T -- "$SNAPSHOT_WORK" "$snapshot_path"
+        SNAPSHOT_WORK=''
+        note "Snapshot saved: $snapshot_path"
+    else
+        SNAPSHOT_WORK=$(mktemp -d "${SNAPSHOT_DATA%/*}/.redroid-restore.XXXXXX")
+        sudo cp -a --reflink=auto --sparse=always -- "$snapshot_path/data" "$SNAPSHOT_WORK/data"
+        sudo mv -T -- "$SNAPSHOT_DATA" "$SNAPSHOT_WORK/previous"
+        sudo mv -T -- "$SNAPSHOT_WORK/data" "$SNAPSHOT_DATA"
+        note "Snapshot restored: $name"
+    fi
+    snapshot_finish
+}
+
 FRIDA_DIR=$SCRIPT_DIR/.cache/frida
 FRIDA_GUEST_BIN=/data/local/tmp/frida-server
 
@@ -1105,7 +1208,7 @@ cmd_frida() {
 
 usage() {
     cat <<'EOF'
-Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|launch|capture|frida}
+Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|launch|snapshot|capture|frida}
 
   setup    Install missing Arch/Debian/Ubuntu tools and build the image
   start    Boot redroid; give hci0 to Android unless --no-bt (or BT_ENABLE=0)
@@ -1115,6 +1218,7 @@ Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|launch|capture|
   logs     Collect container and Android Bluetooth diagnostics
   install  Install an APK, several split APKs, or a directory of splits
   launch   Start an installed app by package name
+  snapshot snapshot save|restore <name>: copy stopped Android data, then restart
   capture  capture start [--no-mitm] | stop | status: pcap + decoded HTTPS
   frida    frida start | stop | unpin <package> | exec <tool> [args]: root hooking
 EOF
@@ -1130,6 +1234,7 @@ case ${1:-} in
     logs) cmd_logs ;;
     install) shift; cmd_install "$@" ;;
     launch) shift; cmd_launch "$@" ;;
+    snapshot) shift; cmd_snapshot "$@" ;;
     capture) shift; cmd_capture "$@" ;;
     frida) shift; cmd_frida "$@" ;;
     *) usage; exit 2 ;;

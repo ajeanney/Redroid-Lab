@@ -1,6 +1,6 @@
 # Redroid-Lab
 
-Toolbox around a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host. Today it provides optional physical Bluetooth passthrough (AOSP Linux-HCI HAL), GPU acceleration, scrcpy, ARM64 translation, APK install, packet capture (tcpdump + mitmproxy) and root-based app investigation (Frida, SSL-pinning bypass). Human docs: [README.md](README.md), [README.fr.md](README.fr.md).
+Toolbox around a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host. Today it provides optional physical Bluetooth passthrough (AOSP Linux-HCI HAL), GPU acceleration, scrcpy, ARM64 translation, APK install, Android data snapshots, packet capture (tcpdump + mitmproxy) and root-based app investigation (Frida, SSL-pinning bypass). Human docs: [README.md](README.md), [README.fr.md](README.fr.md).
 
 ## Local instructions (read first)
 
@@ -16,22 +16,24 @@ Allowed without asking:
 - `./redroid.sh status` (read-only)
 
 Ask first:
-- `./redroid.sh setup | start | stop | screen | logs | install | launch | capture | frida` (installs packages, builds images, takes over Bluetooth, writes `.runtime/`, `captures/` and `.cache/frida/`)
+- `./redroid.sh setup | start | stop | screen | logs | install | launch | snapshot | capture | frida` (installs packages, builds images, takes over Bluetooth, writes `.runtime/`, `snapshots/`, `captures/` and `.cache/frida/`; snapshot restore replaces Android data)
 - Any `docker`, `systemctl`, `bluetoothctl`, `btmgmt`, `nft`, `modprobe` or `sudo` command
 - `git commit`, `git push`, deleting files, adding dependencies or changing pinned digests/checksums
 
 Never:
 - Run `systemctl start bluetooth` or touch `hci0` by hand while `.runtime/state.env` exists; the script owns recovery (use `./redroid.sh stop`, with approval)
 - Loosen the `ADB_HOST` loopback-only check or publish ADB on a non-loopback address
-- Commit `data/`, `.runtime/`, `.cache/`, `captures/`, APKs, keystores, logs, Bluetooth bonds or any `*.local.*` file
+- Commit `data/`, `snapshots/`, `.redroid-restore.*/`, `.runtime/`, `.cache/`, `captures/`, APKs, keystores, logs, Bluetooth bonds or any `*.local.*` file
 - Put secrets, tokens or personal data in tracked files, including this one
 
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `launch`, `capture`, `frida`. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
-| `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, capture dir/port, Frida port, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
+| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `launch`, `snapshot`, `capture`, `frida`. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
+| `redroid.env` | Defaults (image, ports, adapter, `BT_ENABLE`, snapshot/capture directories, capture/Frida ports, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
+| `snapshots/` | Gitignored named copies of Android data (`<name>/data/`); `snapshot save\|restore <name>` stops the existing container and restarts it only if it was running |
+| `.redroid-restore.*/` | Private restore staging next to the data directory; previous data retained on restart failure |
 | `captures/` | Gitignored capture sessions (`full.pcap`, `flows.mitm`, `sslkeylog.txt`, `full-decrypted.pcapng`) |
 | `frida/unpin.js` | Java-layer SSL-pinning bypass loaded by `frida unpin` |
 | `.cache/frida/` | Gitignored: downloaded, checksummed `frida-server` binaries |
@@ -39,6 +41,7 @@ Never:
 | `build-inputs.env` | Pinned source URLs and SHA-256 sums for the HAL build, plus the pinned Frida version/checksum |
 | `build/` | `build-bt-hal.sh` (also patches the HAL to read the HCI index from `ro.redroid.bt.hci`), `validate-runtime.sh`, `btlinux-service.cc`, the HAL `.rc`, `build-arm64-smoke-apk.sh` |
 | `tests/arm64-smoke-app/` | Source of the ARM64-only JNI smoke APK installed and removed by `start` |
+| `tests/test_snapshot.py` | Isolated snapshot round-trip and failure tests with fake Docker, sudo and ADB commands |
 
 The `btlinux` name in HAL files, binaries and `redroid.sh` messages is AOSP's component name (`android.hardware.bluetooth@1.1-service.btlinux`), not the old project name. Do not rename it.
 
@@ -50,6 +53,7 @@ File-scoped checks (preferred, no side effects):
 bash -n redroid.sh
 shellcheck redroid.sh            # also: shellcheck build/<file>.sh
 git diff --check
+python3 tests/test_snapshot.py   # temporary data and fake commands; no hardware or sudo
 ```
 
 Both `bash -n` and `shellcheck` are clean today (rc 0); keep them clean.
@@ -63,7 +67,7 @@ Runtime verification (needs approval, real hardware, Binder-capable kernel):
 ./redroid.sh start --no-bt && ./redroid.sh capture start   # no Bluetooth hardware needed
 ```
 
-There is no automated test suite. Hardware-dependent changes can only be verified by a human on a machine with a supported controller; say so instead of claiming verification.
+Snapshot tests cover file operations and mocked lifecycle failures. Hardware-dependent changes can only be verified by a human on a machine with a supported controller; say so instead of claiming verification.
 
 ## Code style
 

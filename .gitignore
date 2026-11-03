@@ -1,5 +1,7 @@
 # Persistent Android state (contains apps, credentials, bonds, and user data)
 /data/
+/snapshots/
+/.redroid-restore.*/
 
 # Packet capture sessions (pcaps, decoded flows, TLS keys)
 /captures/

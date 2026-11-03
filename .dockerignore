@@ -8,6 +8,8 @@
 
 # Host runtime and persistent Android state
 data
+snapshots
+.redroid-restore.*
 .runtime
 .cache
 captures
