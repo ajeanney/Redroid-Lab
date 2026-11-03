@@ -304,6 +304,7 @@ cmd_start() {
         ro.dalvik.vm.isa.arm64=x86_64 \
         ro.enable.native.bridge.exec=1 \
         ro.dalvik.vm.native.bridge="$REDROID_NATIVE_BRIDGE" \
+        ro.redroid.camera="$CAMERA_ENABLE" \
         ro.redroid.bt.hci="${BT_ADAPTER#hci}" \
         "${identity_properties[@]}" >/dev/null
 

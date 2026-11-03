@@ -1,6 +1,6 @@
 # Redroid-Lab
 
-Toolbox around a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host. Today it provides optional physical Bluetooth passthrough (AOSP Linux-HCI HAL), GPU acceleration, scrcpy, ARM64 translation, APK install/pull with optional static analysis, Android data snapshots, packet capture (tcpdump + mitmproxy) and root-based app investigation (Frida, SSL-pinning bypass). Human docs: [README.md](README.md), [README.fr.md](README.fr.md).
+Toolbox around a pinned Android 14 [redroid](https://github.com/remote-android/redroid-doc) container on an x86_64 Linux host. Today it provides optional physical Bluetooth passthrough (AOSP Linux-HCI HAL), a synthetic camera, GPU acceleration, scrcpy, ARM64 translation, APK install/pull with optional static analysis, Android data snapshots, packet capture (tcpdump + mitmproxy) and root-based app investigation (Frida, SSL-pinning bypass). Human docs: [README.md](README.md), [README.fr.md](README.fr.md).
 
 ## Local instructions (read first)
 
@@ -44,6 +44,7 @@ Never:
 | `Dockerfile` | Overlay on the pinned redroid image; builds and installs the Bluetooth HAL |
 | `build-inputs.env` | Pinned source URLs and SHA-256 sums for the HAL build, plus the pinned Frida version/checksum |
 | `build/` | `build-bt-hal.sh` (also patches the HAL to read the HCI index from `ro.redroid.bt.hci`), `validate-runtime.sh`, `btlinux-service.cc`, the HAL `.rc`, `build-arm64-smoke-apk.sh` |
+| `build/build-camera-hal.sh` | Builds the pinned AOSP synthetic camera/HIDL adapter and GBM allocator with camera-format support. `synthetic-camera-*` adapts buffers, JPEG and shutdown; `camera-gralloc-compat.patch` adds format/size checks. `CAMERA_ENABLE` controls `ro.redroid.camera`; disabled still registers an empty provider. `check-camera.cc` checks Camera2/YUV/JPEG as guest root; built at `/out/check-camera` in `camera_builder`, not shipped in the image |
 | `tests/arm64-smoke-app/` | Source of the ARM64-only JNI smoke APK installed and removed by `start` |
 | `tests/test_adb_guard.py` | Real nftables ADB guard in an unprivileged user+network namespace: blocks a LAN neighbour before Docker-style DNAT, keeps loopback, removes only its own table (skips without user namespaces) |
 | `tests/test_capture.py` | Isolated explicit/raw/transparent capture lifecycle and rollback tests with fake host tools |

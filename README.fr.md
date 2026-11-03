@@ -13,6 +13,7 @@ similaires.
 | --- | --- |
 | Image redroid 14 épinglée avec données persistantes, GPU Intel, scrcpy | Disponible |
 | Traduction des applications ARM64 (`libndk_translation`) | Disponible |
+| Caméra arrière virtuelle avec une scène de test générée par AOSP | Disponible |
 | Bluetooth physique en passthrough (HAL Linux-HCI d'AOSP) | Disponible |
 | Bluetooth optionnel : démarrage sans lui avec `start --no-bt` | Disponible |
 | Capture de paquets réseau (pcap + HTTPS décodé), proxy transparent et installation d'APK | Disponible |
@@ -200,6 +201,7 @@ Les valeurs par défaut sont dans `redroid.env` :
 - noms de l'image de base épinglée et de l'image locale
 - nom du conteneur et port ADB de la loopback
 - adaptateur Bluetooth, identifiant USB attendu et `BT_ENABLE` (`1` par défaut)
+- caméra synthétique (`CAMERA_ENABLE`, `1` par défaut ; `0` n'expose aucune caméra)
 - dossier de capture (`CAPTURE_DIR`) et port mitmproxy préféré (`MITM_PORT`)
 - table de capture transparente (`CAPTURE_NFT_TABLE`) et groupe réservé au proxy (`MITM_GID`)
 - port Frida redirigé vers l'hôte (`FRIDA_PORT`, loopback uniquement)
@@ -247,6 +249,29 @@ Un profil incohérent peut modifier leur comportement.
 Les données Android persistent dans `data/`. Installez des applications avec
 `./redroid.sh install /chemin/vers/application.apk` (ou un dossier d'APK découpés).
 Aucun service Google ni Play Store n'est inclus.
+
+## Caméra virtuelle
+
+L'overlay contient une caméra arrière synthétique, activée par défaut. Elle génère
+la scène de test animée d'AOSP sans utiliser la webcam de l'hôte. Les applications
+peuvent l'ouvrir via les API caméra habituelles d'Android. Mettez `CAMERA_ENABLE=0`
+dans une configuration locale pour n'exposer aucune caméra ; les anciennes
+configurations héritent de `1`. Appliquez le changement avec `stop` puis `start`
+en conservant la même configuration.
+
+Après une mise à jour depuis une ancienne image, lancez `./redroid.sh setup`, puis
+arrêtez et redémarrez le conteneur. L'image de base épinglée n'a pas de fournisseur
+caméra : son application Appareil photo plante avec
+`ArrayIndexOutOfBoundsException: length=0; index=0`. Effacer les données de
+l'application ne peut pas fournir le périphérique manquant.
+
+C'est une caméra de test. Le passthrough webcam et le chargement d'images ou de
+vidéos personnelles ne sont pas implémentés. Les sources et l'adaptateur sont
+épinglés dans `build-inputs.env` ; la compilation vérifie leur contenu et valide
+le binaire contre l'image de base.
+L'image recompile aussi GBM gralloc pour prendre en charge les buffers caméra
+YUV/JPEG et refuser les formats non supportés sans faire planter l'allocateur
+graphique d'Android.
 
 ## Extraction d'applications et analyse statique
 

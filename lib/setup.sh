@@ -111,10 +111,15 @@ build_image() {
         BT_SOURCE_URL BT_SOURCE_TREE_SHA256 \
         VNDK_INCLUDE_URL VNDK_INCLUDE_TREE_SHA256 \
         VNDK_SHARED_URL VNDK_SHARED_TREE_SHA256 \
-        NDK_URL NDK_SHA256; do
+        NDK_URL NDK_SHA256 \
+        CAMERA_SOURCE_URL CAMERA_SOURCE_TREE_SHA256 \
+        CAMERA_INTERFACE_URL CAMERA_INTERFACE_TREE_SHA256 \
+        CAMERA_METADATA_HEADER_URL CAMERA_METADATA_HEADER_SHA256 \
+        GRALLOC_SOURCE_URL GRALLOC_SOURCE_SHA256 GBM_HEADER_URL GBM_HEADER_SHA256 \
+        GRALLOC_HEADER_URL GRALLOC_HEADER_SHA256; do
         build_args+=(--build-arg "$name=${!name}")
     done
-    note "Building compact Bluetooth HAL overlay image"
+    note "Building Bluetooth and synthetic camera HAL overlay image"
     docker build --pull \
         --build-arg "BASE_IMAGE=$BASE_IMAGE" \
         "${build_args[@]}" \

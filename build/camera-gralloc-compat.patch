@@ -1,0 +1,28 @@
+--- a/gralloc_gbm.cpp
++++ b/gralloc_gbm.cpp
+@@ -93,0 +94,2 @@
++	case HAL_PIXEL_FORMAT_BLOB:
++        return GBM_FORMAT_R8;
+@@ -136 +138,2 @@
+-	case HAL_PIXEL_FORMAT_YV12:
++	case HAL_PIXEL_FORMAT_BLOB:
++    case HAL_PIXEL_FORMAT_YV12:
+@@ -184,0 +188,4 @@
++    if (handle->format == HAL_PIXEL_FORMAT_BLOB) {
++        data.width = 4096;
++        data.height = (handle->width + 4095) / 4096;
++    }
+@@ -217,0 +225,4 @@
++    if (handle->format == HAL_PIXEL_FORMAT_BLOB) {
++        width = 4096;
++        height = (handle->width + 4095) / 4096;
++    }
+@@ -374,0 +386,8 @@
++    if (format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) {
++        format = (usage & GRALLOC_USAGE_HW_CAMERA_WRITE) && !(usage & GRALLOC_USAGE_HW_TEXTURE) ?
++                HAL_PIXEL_FORMAT_YV12 : HAL_PIXEL_FORMAT_RGBA_8888;
++    } else if (format == HAL_PIXEL_FORMAT_YCbCr_420_888) {
++        format = HAL_PIXEL_FORMAT_YV12;
++    }
++    if (width <= 0 || height <= 0 || gralloc_gbm_get_bpp(format) == 0) return nullptr;
++    if (format == HAL_PIXEL_FORMAT_BLOB && (height != 1 || width > INT32_MAX - 4095)) return nullptr;

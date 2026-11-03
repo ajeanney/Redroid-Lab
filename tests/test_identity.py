@@ -46,7 +46,7 @@ class IdentityTests(unittest.TestCase):
         if old_config:
             config = "\n".join(line for line in config.splitlines() if not line.startswith((
                 "REDROID_MODEL=", "REDROID_MANUFACTURER=", "REDROID_BRAND=", "REDROID_DEVICE=",
-                "REDROID_PRODUCT=", "REDROID_FINGERPRINT=", "REDROID_QEMU=")))
+                "REDROID_PRODUCT=", "REDROID_FINGERPRINT=", "REDROID_QEMU=", "CAMERA_ENABLE=")))
         overrides = {"REDROID_DATA_DIR": str(self.root / "data"), **(overrides or {})}
         self.config.write_text(config + "\n" + "\n".join(f"{key}={shlex.quote(value)}" for key, value in overrides.items()))
         state = Path(tempfile.mkdtemp(dir=self.root))
@@ -62,6 +62,14 @@ class IdentityTests(unittest.TestCase):
             self.assertFalse(any(a.startswith(("ro.product.model=", "ro.build.fingerprint=", "ro.kernel.qemu=")) for a in args))
             self.assertIn("127.0.0.1:5555:5555", args)
             self.assertIn("ro.product.cpu.abilist=x86_64,x86,arm64-v8a", args)
+            self.assertIn("ro.redroid.camera=1", args)
+
+    def test_synthetic_camera_switch(self):
+        for enabled in ("0", "1"):
+            with self.subTest(enabled=enabled):
+                args = self.start({"CAMERA_ENABLE": enabled})
+                self.assertIn(f"ro.redroid.camera={enabled}", args)
+        self.assertEqual(self.start({"CAMERA_ENABLE": "2"}, ok=False), [])
 
     def test_properties_are_single_arguments_after_the_image(self):
         values = {"REDROID_MODEL": "Lab Phone $(touch nope)", "REDROID_MANUFACTURER": "Lab Maker",

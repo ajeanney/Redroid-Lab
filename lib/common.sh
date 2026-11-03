@@ -52,7 +52,7 @@ load_config() {
     local identity_names=(REDROID_MODEL REDROID_MANUFACTURER REDROID_BRAND
         REDROID_DEVICE REDROID_PRODUCT REDROID_FINGERPRINT REDROID_QEMU)
     # Existing local configurations inherit defaults for newly added settings.
-    for name in SNAPSHOT_DIR PULL_DIR APPDATA_DIR CAPTURE_NFT_TABLE MITM_GID "${identity_names[@]}"; do
+    for name in SNAPSHOT_DIR PULL_DIR APPDATA_DIR CAPTURE_NFT_TABLE MITM_GID CAMERA_ENABLE "${identity_names[@]}"; do
         if [[ ! -v $name ]]; then
             # shellcheck source=/dev/null
             default=$(source "$SCRIPT_DIR/redroid.env"; printf '%s' "${!name}")
@@ -63,7 +63,7 @@ load_config() {
         BT_ADAPTER NFT_TABLE REDROID_DATA_DIR REDROID_WIDTH REDROID_HEIGHT \
         REDROID_DPI REDROID_FPS REDROID_GPU_MODE REDROID_NATIVE_BRIDGE \
         HOST_NETNS_SOURCE BOOT_TIMEOUT BT_ENABLE CAPTURE_DIR MITM_PORT FRIDA_PORT \
-        SNAPSHOT_DIR PULL_DIR APPDATA_DIR CAPTURE_NFT_TABLE MITM_GID; do
+        SNAPSHOT_DIR PULL_DIR APPDATA_DIR CAPTURE_NFT_TABLE MITM_GID CAMERA_ENABLE; do
         [[ -n ${!name:-} ]] || die "missing configuration value '$name'"
     done
     for name in ADB_PORT MITM_PORT FRIDA_PORT; do
@@ -71,6 +71,7 @@ load_config() {
     done
     [[ $ADB_HOST == 127.0.0.1 ]] || die "ADB_HOST must be 127.0.0.1"
     [[ $BT_ENABLE == [01] ]] || die "BT_ENABLE must be 0 or 1"
+    [[ $CAMERA_ENABLE == [01] ]] || die "CAMERA_ENABLE must be 0 or 1"
     [[ $HOST_NETNS_SOURCE == /* ]] || die "HOST_NETNS_SOURCE must be an absolute path"
     for name in NFT_TABLE CAPTURE_NFT_TABLE; do
         [[ ${!name} =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "$name contains invalid characters"

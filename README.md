@@ -12,6 +12,7 @@ inspection, and similar reverse-engineering workflows.
 | --- | --- |
 | Pinned redroid 14 image with persistent data, Intel GPU, scrcpy | Available |
 | ARM64 application translation (`libndk_translation`) | Available |
+| Virtual back camera with an AOSP generated test scene | Available |
 | Physical Bluetooth passthrough (AOSP Linux-HCI HAL) | Available |
 | Optional Bluetooth: run without it via `start --no-bt` | Available |
 | Network packet capture (pcap + decoded HTTPS), transparent proxying and APK install | Available |
@@ -194,6 +195,7 @@ Defaults are in `redroid.env`:
 - pinned base and local image names
 - container name and loopback ADB port
 - Bluetooth adapter, expected USB ID, and `BT_ENABLE` (default `1`)
+- synthetic camera (`CAMERA_ENABLE`, default `1`; `0` exposes no cameras)
 - capture directory (`CAPTURE_DIR`) and preferred mitmproxy port (`MITM_PORT`)
 - transparent capture table (`CAPTURE_NFT_TABLE`) and proxy-only group (`MITM_GID`)
 - host-forwarded Frida port (`FRIDA_PORT`, loopback only)
@@ -240,6 +242,25 @@ properties or kernel/device signals. Inconsistent profiles may change app behavi
 Android data persists under `data/`. Install applications with
 `./redroid.sh install /path/to/application.apk` (or a directory of split APKs).
 No Google services or Play Store are included.
+
+## Virtual camera
+
+The overlay includes one synthetic back camera, enabled by default. It generates
+AOSP's animated test scene and uses no host webcam. Camera apps can open this
+device through Android's normal camera APIs. Set `CAMERA_ENABLE=0` in a local
+configuration to expose no camera devices; older configurations inherit `1`.
+Apply changes with `stop` followed by `start` using the same configuration.
+
+After updating from an older image, run `./redroid.sh setup`, then stop and start
+the container. The stock pinned image has no camera provider: its bundled Camera
+app crashes with `ArrayIndexOutOfBoundsException: length=0; index=0`. Clearing the
+app's data cannot supply the missing device.
+
+This is a test camera. Webcam passthrough and loading your own images or videos
+are not implemented. Its sources and adapter are pinned in `build-inputs.env`;
+the build checks their contents and validates the binary against the base image.
+The image also rebuilds GBM gralloc to support camera YUV/JPEG buffers and reject
+unsupported formats without crashing Android's graphics allocator.
 
 ## App pull and static analysis
 

@@ -1,0 +1,177 @@
+--- a/EmulatedFakeCamera3.cpp
++++ b/EmulatedFakeCamera3.cpp
+@@ -31 +31 @@
+-#include "EmulatedCameraFactory.h"
++
+@@ -63 +63 @@
+-        //        HAL_PIXEL_FORMAT_YV12,
++                HAL_PIXEL_FORMAT_YV12,
+@@ -194,2 +193,0 @@
+-        mSensor.clear();
+-
+@@ -211,0 +210 @@
++        mSensor.clear();
+@@ -219 +218 @@
+-    info->orientation = gEmulatedCameraFactory.getFakeCameraOrientation();
++    info->orientation = 90;
+@@ -351 +350 @@
+-                newStream->usage |= GRALLOC_USAGE_HW_CAMERA_WRITE;
++                newStream->usage |= GRALLOC_USAGE_HW_CAMERA_WRITE | GRALLOC_USAGE_SW_WRITE_OFTEN;
+@@ -361 +360 @@
+-        // Set the buffer format, inline with gralloc implementation
++        // GBM needs concrete formats; flexible YUV uses its planar YV12 layout.
+@@ -363,11 +362,4 @@
+-            if (newStream->usage & GRALLOC_USAGE_HW_CAMERA_WRITE) {
+-                if (newStream->usage & GRALLOC_USAGE_HW_TEXTURE) {
+-                    newStream->format = HAL_PIXEL_FORMAT_RGBA_8888;
+-                }
+-                else if (newStream->usage & GRALLOC_USAGE_HW_VIDEO_ENCODER) {
+-                    newStream->format = HAL_PIXEL_FORMAT_YCbCr_420_888;
+-                }
+-                else {
+-                    newStream->format = HAL_PIXEL_FORMAT_RGB_888;
+-                }
+-            }
++            newStream->format = (newStream->usage & GRALLOC_USAGE_HW_VIDEO_ENCODER) ?
++                    HAL_PIXEL_FORMAT_YV12 : HAL_PIXEL_FORMAT_RGBA_8888;
++        } else if (newStream->format == HAL_PIXEL_FORMAT_YCbCr_420_888) {
++            newStream->format = HAL_PIXEL_FORMAT_YV12;
+@@ -931 +923,2 @@
+-            destBuf.format = srcBuf.stream->format;
++            destBuf.format = srcBuf.stream->format == HAL_PIXEL_FORMAT_YV12 ?
++                    HAL_PIXEL_FORMAT_YCbCr_420_888 : srcBuf.stream->format;
+@@ -950 +943,2 @@
+-            if (srcBuf.stream->format == HAL_PIXEL_FORMAT_YCbCr_420_888) {
++            if (srcBuf.stream->format == HAL_PIXEL_FORMAT_YCbCr_420_888 ||
++                srcBuf.stream->format == HAL_PIXEL_FORMAT_YV12) {
+@@ -955 +949 @@
+-                        GRALLOC_USAGE_HW_CAMERA_WRITE,
++                        GRALLOC_USAGE_SW_WRITE_OFTEN,
+@@ -958,2 +952 @@
+-                    // This is only valid because we know that emulator's
+-                    // YCbCr_420_888 is really contiguous NV21 under the hood
++                    // Preserve the mapper-provided planes and strides for the sensor.
+@@ -960,0 +954 @@
++                    destBuf.ycbcr = ycbcr;
+@@ -969 +963 @@
+-                    GRALLOC_USAGE_HW_CAMERA_WRITE,
++                    GRALLOC_USAGE_SW_WRITE_OFTEN,
+@@ -973,0 +968 @@
++            if (res == OK && !destBuf.img) res = BAD_VALUE;
+@@ -1107 +1102 @@
+-    // Default to FULL_LEVEL plus RAW if nothing is defined
++    // Only basic synthetic-camera capabilities are supported on redroid.
+@@ -1109,5 +1104 @@
+-        mCapabilities.add(FULL_LEVEL);
+-        // "RAW" causes several CTS failures: b/68723953, disable it so far.
+-        // TODO: add "RAW" back when all failures are resolved.
+-        mCapabilities.add(RAW);
+-        mCapabilities.add(MOTION_TRACKING);
++        mCapabilities.add(BACKWARD_COMPATIBLE);
+@@ -1333 +1324 @@
+-    static const uint8_t flashAvailable = 1;
++    static const uint8_t flashAvailable = 0;
+@@ -1373,3 +1363,0 @@
+-        HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED, 176, 144, ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT,
+-        HAL_PIXEL_FORMAT_YCbCr_420_888, 176, 144, ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT,
+-        HAL_PIXEL_FORMAT_BLOB, 176, 144, ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT,
+@@ -1423,3 +1410,0 @@
+-        HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED, 176, 144, Sensor::kFrameDurationRange[0],
+-        HAL_PIXEL_FORMAT_YCbCr_420_888, 176, 144, Sensor::kFrameDurationRange[0],
+-        HAL_PIXEL_FORMAT_BLOB, 176, 144, Sensor::kFrameDurationRange[0],
+@@ -1473,3 +1457,0 @@
+-        HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED, 176, 144, 0,
+-        HAL_PIXEL_FORMAT_YCbCr_420_888, 176, 144, 0,
+-        HAL_PIXEL_FORMAT_RGBA_8888, 176, 144, 0,
+--- a/fake-pipeline2/Base.h
++++ b/fake-pipeline2/Base.h
+@@ -25,0 +26 @@
++#include <hardware/gralloc.h>
+@@ -42,0 +44 @@
++    android_ycbcr ycbcr{};
+--- a/fake-pipeline2/JpegCompressor.cpp
++++ b/fake-pipeline2/JpegCompressor.cpp
+@@ -21,2 +21,3 @@
+-
+-#include <gralloc_cb_bp.h>
++#include <android/gralloc_handle.h>
++
++
+@@ -34,0 +36,2 @@
++        mFoundAux(false),
++        mFoundJpeg(false),
+@@ -135 +138,2 @@
+-    bool mFoundAux = false;
++    mFoundAux = false;
++    mFoundJpeg = false;
+@@ -182,8 +186,30 @@
+-    nV21JpegCompressor.compressRawImage((void*)mAuxBuffer.img,
+-                                         mAuxBuffer.width,
+-                                         mAuxBuffer.height,
+-                                         jpegQuality, exifData);
+-    nV21JpegCompressor.getCompressedImage((void*)mJpegBuffer.img);
+-
+-    // Refer to /hardware/libhardware/include/hardware/camera3.h
+-    // Transport header for compressed JPEG buffers in output streams.
++    status_t result = nV21JpegCompressor.compressRawImage(mAuxBuffer.img,
++            mAuxBuffer.width, mAuxBuffer.height, jpegQuality, exifData);
++    if (result != OK) {
++        freeExifData(exifData);
++        return result;
++    }
++    const size_t compressedSize = nV21JpegCompressor.getCompressedSize();
++    uint64_t capacity = 0;
++    buffer_handle_t handle = *mJpegBuffer.buffer;
++    if (mGBM->getWidth(handle, &capacity) != OK) {
++        // The pinned GBM mapper predates the standard buffer metadata API.
++        if (handle->numFds != GRALLOC_HANDLE_NUM_FDS ||
++            handle->numInts != GRALLOC_HANDLE_NUM_INTS) {
++            freeExifData(exifData);
++            return BAD_VALUE;
++        }
++        const gralloc_handle_t* gbm = gralloc_handle(handle);
++        if (gbm->magic != GRALLOC_HANDLE_MAGIC || gbm->version != GRALLOC_HANDLE_VERSION ||
++            gbm->format != HAL_PIXEL_FORMAT_BLOB || gbm->height != 1) {
++            freeExifData(exifData);
++            return BAD_VALUE;
++        }
++        capacity = gbm->width;
++    }
++    if (compressedSize == 0 || capacity < sizeof(camera3_jpeg_blob_t) ||
++        compressedSize > capacity - sizeof(camera3_jpeg_blob_t)) {
++        freeExifData(exifData);
++        return BAD_VALUE;
++    }
++    nV21JpegCompressor.getCompressedImage(mJpegBuffer.img);
+@@ -191 +216,0 @@
+-    const cb_handle_t *cb = cb_handle_t::from(*mJpegBuffer.buffer);
+@@ -194 +219 @@
+-    memcpy(mJpegBuffer.img + cb->width - sizeof(camera3_jpeg_blob_t),
++    memcpy(mJpegBuffer.img + capacity - sizeof(camera3_jpeg_blob_t),
+--- a/fake-pipeline2/Sensor.cpp
++++ b/fake-pipeline2/Sensor.cpp
+@@ -356 +356 @@
+-                    captureYU12(b.img, gain, b.width, b.height);
++                    captureYU12(b.img, gain, b.width, b.height, b.ycbcr.y ? &b.ycbcr : nullptr);
+@@ -509 +509 @@
+-void Sensor::captureYU12(uint8_t *img, uint32_t gain, uint32_t width, uint32_t height) {
++void Sensor::captureYU12(uint8_t *img, uint32_t gain, uint32_t width, uint32_t height, const android_ycbcr* layout) {
+@@ -537,3 +537,3 @@
+-        uint8_t *pxY = img + outY * width;
+-        uint8_t *pxU = img + height * width + (outY / 2) * (width / 2);
+-        uint8_t *pxV = pxU + (height / 2) * (width / 2);
++        uint8_t *pxY = layout ? static_cast<uint8_t*>(layout->y) + outY * layout->ystride : img + outY * width;
++        uint8_t *pxU = layout ? static_cast<uint8_t*>(layout->cb) + (outY / 2) * layout->cstride : img + height * width + (outY / 2) * (width / 2);
++        uint8_t *pxV = layout ? static_cast<uint8_t*>(layout->cr) + (outY / 2) * layout->cstride : pxU + (height / 2) * (width / 2);
+@@ -560,2 +560,4 @@
+-                *pxV++ = (rgbToCr[0] * rCount + rgbToCr[1] * gCount + rgbToCr[2] * bCount + rgbToCr[3]);
+-                *pxU++ = (rgbToCb[0] * rCount + rgbToCb[1] * gCount + rgbToCb[2] * bCount + rgbToCb[3]);
++                *pxV = (rgbToCr[0] * rCount + rgbToCr[1] * gCount + rgbToCr[2] * bCount + rgbToCr[3]);
++                pxV += layout ? layout->chroma_step : 1;
++                *pxU = (rgbToCb[0] * rCount + rgbToCb[1] * gCount + rgbToCb[2] * bCount + rgbToCb[3]);
++                pxU += layout ? layout->chroma_step : 1;
+--- a/fake-pipeline2/Sensor.h
++++ b/fake-pipeline2/Sensor.h
+@@ -241 +241 @@
+-    void captureYU12(uint8_t *img, uint32_t gain, uint32_t width, uint32_t height);
++    void captureYU12(uint8_t *img, uint32_t gain, uint32_t width, uint32_t height, const android_ycbcr* layout = nullptr);

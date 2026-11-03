@@ -1,0 +1,5 @@
+service vendor.camera-synthetic /vendor/bin/hw/android.hardware.camera.provider@2.4-service.synthetic
+    class hal
+    user cameraserver
+    group camera graphics system
+    interface android.hardware.camera.provider@2.4::ICameraProvider legacy/0
