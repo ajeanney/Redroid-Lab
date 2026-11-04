@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# `snapshot save|restore`: copy Android data while the container is stopped.
+# Snapshot copies and shared staging/recovery for Android data replacement.
 
 # Trap state is global because Bash unwinds function locals before EXIT on errors.
 snapshot_finish() {
@@ -46,31 +46,30 @@ snapshot_check_container() {
     esac
 }
 
-cmd_snapshot() {
-    local action=${1:-} name=${2:-} snapshot_path
+snapshot_run() {
+    local action=$1 name=${2:-} snapshot_path='' toolbox_path
     SNAPSHOT_WORK=''
     SNAPSHOT_RESTART=0
-    [[ $# == 2 && ( $action == save || $action == restore ) ]] || \
-        die "usage: $0 snapshot {save|restore} <name>"
-    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || \
-        die "snapshot name must be 1-64 letters, digits, dots, underscores or hyphens, starting with a letter or digit"
-    need docker adb sudo flock cp mv mktemp realpath
+    need docker adb sudo flock cp mv mkdir chown chmod mktemp realpath
     acquire_lock
     docker info >/dev/null 2>&1 || die "Docker daemon is unavailable"
     [[ -d $REDROID_DATA_DIR ]] || die "Android data directory is missing: $REDROID_DATA_DIR"
     SNAPSHOT_DATA=$(realpath -e -- "$REDROID_DATA_DIR")
-    SNAPSHOT_DIR=$(realpath -m -- "$SNAPSHOT_DIR")
-    [[ $SNAPSHOT_DATA != / && $SNAPSHOT_DIR != / && $SNAPSHOT_DIR != "$SNAPSHOT_DATA" && \
-       $SNAPSHOT_DIR != "$SNAPSHOT_DATA/"* && $SNAPSHOT_DATA != "$SNAPSHOT_DIR/"* ]] || \
-        die "snapshot and Android data directories must be separate, non-nested directories"
-    [[ $SCRIPT_DIR != "$SNAPSHOT_DATA" && $SCRIPT_DIR != "$SNAPSHOT_DATA/"* ]] || \
+    toolbox_path=$(realpath -e -- "$SCRIPT_DIR")
+    [[ $SNAPSHOT_DATA != / && $toolbox_path != "$SNAPSHOT_DATA" && $toolbox_path != "$SNAPSHOT_DATA/"* ]] || \
         die "Android data directory must not contain the toolbox itself"
-    snapshot_path=$SNAPSHOT_DIR/$name
-    if [[ $action == save ]]; then
-        [[ ! -e $snapshot_path && ! -L $snapshot_path ]] || die "snapshot already exists: $name"
-    else
-        [[ -d $snapshot_path/data && ! -L $snapshot_path && ! -L $snapshot_path/data ]] || \
-            die "snapshot not found or invalid: $name"
+    if [[ $action != reset ]]; then
+        SNAPSHOT_DIR=$(realpath -m -- "$SNAPSHOT_DIR")
+        [[ $SNAPSHOT_DIR != / && $SNAPSHOT_DIR != "$SNAPSHOT_DATA" && \
+           $SNAPSHOT_DIR != "$SNAPSHOT_DATA/"* && $SNAPSHOT_DATA != "$SNAPSHOT_DIR/"* ]] || \
+            die "snapshot and Android data directories must be separate, non-nested directories"
+        snapshot_path=$SNAPSHOT_DIR/$name
+        if [[ $action == save ]]; then
+            [[ ! -e $snapshot_path && ! -L $snapshot_path ]] || die "snapshot already exists: $name"
+        else
+            [[ -d $snapshot_path/data && ! -L $snapshot_path && ! -L $snapshot_path/data ]] || \
+                die "snapshot not found or invalid: $name"
+        fi
     fi
     snapshot_check_container
 
@@ -80,7 +79,7 @@ cmd_snapshot() {
     capture_stop_active
     if [[ $SNAPSHOT_RESTART == 1 ]]; then
         frida_forget
-        note "Stopping Android for snapshot $action"
+        note "Stopping Android for data $action"
         docker stop --time 20 "$CONTAINER_NAME" >/dev/null
         [[ $(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME") == exited ]] || \
             die "container did not stop"
@@ -94,10 +93,29 @@ cmd_snapshot() {
         note "Snapshot saved: $snapshot_path"
     else
         SNAPSHOT_WORK=$(mktemp -d "${SNAPSHOT_DATA%/*}/.redroid-restore.XXXXXX")
-        sudo cp -a --reflink=auto --sparse=always -- "$snapshot_path/data" "$SNAPSHOT_WORK/data"
+        if [[ $action == reset ]]; then
+            sudo mkdir -- "$SNAPSHOT_WORK/data"
+            sudo chown --reference="$SNAPSHOT_DATA" -- "$SNAPSHOT_WORK/data"
+            sudo chmod --reference="$SNAPSHOT_DATA" -- "$SNAPSHOT_WORK/data"
+        else
+            sudo cp -a --reflink=auto --sparse=always -- "$snapshot_path/data" "$SNAPSHOT_WORK/data"
+        fi
         sudo mv -T -- "$SNAPSHOT_DATA" "$SNAPSHOT_WORK/previous"
         sudo mv -T -- "$SNAPSHOT_WORK/data" "$SNAPSHOT_DATA"
-        note "Snapshot restored: $name"
+        if [[ $action == reset ]]; then
+            note "Android data reset to factory defaults"
+        else
+            note "Snapshot restored: $name"
+        fi
     fi
     snapshot_finish
+}
+
+cmd_snapshot() {
+    local action=${1:-} name=${2:-}
+    [[ $# == 2 && ( $action == save || $action == restore ) ]] || \
+        die "usage: $0 snapshot {save|restore} <name>"
+    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || \
+        die "snapshot name must be 1-64 letters, digits, dots, underscores or hyphens, starting with a letter or digit"
+    snapshot_run "$action" "$name"
 }

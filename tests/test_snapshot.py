@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Snapshot checks using temporary data and fake host/guest commands."""
+"""Snapshot and factory-reset checks with temporary data and fake commands."""
 import fcntl
 import json
 import os
@@ -60,6 +60,8 @@ if cmd == "docker":
 elif cmd == "sudo":
     if args == ["-v"]:
         sys.exit(0)
+    if fault in ("mkdir", "chmod") and args[0] == fault:
+        sys.exit(1)
     sys.exit(subprocess.call(args))
 elif cmd == "adb":
     if "getprop" in args:
@@ -128,6 +130,15 @@ class SnapshotTests(unittest.TestCase):
         path = self.root / "events"
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
+    def run_reset(self, *args, fault="", ok=True):
+        result = subprocess.run(
+            ["bash", str(self.root / "redroid.sh"), "reset", *args],
+            env=dict(self.env, SNAPSHOT_TEST_FAULT=fault), capture_output=True, text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
+        return result
+
     def assert_status(self, status):
         self.assertEqual(json.loads((self.root / "container.json").read_text())["status"], status)
 
@@ -150,6 +161,111 @@ class SnapshotTests(unittest.TestCase):
             if event[0] == "cp":
                 self.assertTrue(any(e[:2] == ["docker", "stop"] for e in events[:index]))
         self.assertEqual((self.root / ".runtime/state.env").read_text(), "BT_MANAGED=0\n")
+
+    def test_reset_requires_explicit_confirmation_before_host_commands(self):
+        for args in ((), ("--force",), ("--yes", "extra")):
+            with self.subTest(args=args):
+                result = self.run_reset(*args, ok=False)
+                self.assertIn("reset --yes", result.stderr)
+        self.assertEqual(self.events(), [])
+        self.assertEqual((self.data / "app").read_text(), "clean")
+
+    def test_reset_empties_data_and_preserves_snapshots_and_external_files(self):
+        self.run_snapshot("save")
+        (self.root / "events").write_text("")
+        self.data.chmod(0o750)
+        before = self.data.stat()
+        outside = self.root / "outside"
+        outside.write_text("keep")
+        (self.data / "external").symlink_to(outside)
+        self.run_reset("--yes")
+        self.assertEqual(list(self.data.iterdir()), [])
+        self.assertEqual(self.data.stat().st_mode & 0o777, 0o750)
+        self.assertEqual((self.data.stat().st_uid, self.data.stat().st_gid), (before.st_uid, before.st_gid))
+        self.assertEqual(outside.read_text(), "keep")
+        self.assertEqual((self.root / "snapshots/clean/data/app").read_text(), "clean")
+        self.assertFalse(list(self.root.glob(".redroid-restore.*")))
+        self.assert_status("running")
+        self.assertEqual([e[1] for e in self.events() if e[:2] in
+                          (["docker", "start"], ["docker", "stop"])], ["stop", "start"])
+        self.assertEqual((self.root / ".runtime/state.env").read_text(), "BT_MANAGED=0\n")
+
+    def test_reset_offline_leaves_the_container_stopped_or_absent(self):
+        for status in ("absent", "exited", "created"):
+            with self.subTest(status=status):
+                self.state(status)
+                (self.data / "app").write_text("dirty")
+                self.run_reset("--yes")
+                self.assertEqual(list(self.data.iterdir()), [])
+                self.assert_status(status)
+        self.assertFalse(any(e[:2] in (["docker", "start"], ["docker", "stop"]) for e in self.events()))
+
+    def test_reset_preparation_and_swap_failures_preserve_current_data(self):
+        for fault in ("mkdir", "chmod", "swap"):
+            with self.subTest(fault=fault):
+                self.run_reset("--yes", fault=fault, ok=False)
+                self.assertEqual((self.data / "app").read_text(), "clean")
+                self.assertFalse(list(self.root.glob(".redroid-restore.*")))
+                self.assert_status("running")
+
+    def test_reset_restart_failure_retains_previous_data(self):
+        result = self.run_reset("--yes", fault="start", ok=False)
+        backup, = self.root.glob(".redroid-restore.*/previous/app")
+        self.assertEqual(backup.read_text(), "clean")
+        self.assertEqual(list(self.data.iterdir()), [])
+        self.assertIn("previous Android data retained", result.stderr)
+        self.assert_status("exited")
+
+    def test_reset_rejects_unsafe_paths_and_mounts_before_stop(self):
+        self.state("running", mount=str(self.root))
+        self.run_reset("--yes", ok=False)
+        self.state("running")
+        for path in ("/", str(self.root)):
+            with (self.root / "redroid.env").open("a") as config:
+                config.write(f"\nREDROID_DATA_DIR={shlex.quote(path)}\n")
+            self.run_reset("--yes", ok=False)
+        self.assertFalse(any(e[:2] == ["docker", "stop"] for e in self.events()))
+
+    def test_reset_stop_failure_never_replaces_data(self):
+        for fault in ("stop", "still-running"):
+            self.run_reset("--yes", fault=fault, ok=False)
+        self.assertEqual((self.data / "app").read_text(), "clean")
+        self.assertFalse(any(e[0] == "mv" for e in self.events()))
+
+    def test_reset_cannot_erase_the_toolbox_through_a_symlink(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        self.state("running", mount=str(self.root))
+        with (self.root / "redroid.env").open("a") as config:
+            config.write(f"\nREDROID_DATA_DIR={shlex.quote(str(self.root))}\n")
+        result = subprocess.run(["bash", str(alias / "redroid.sh"), "reset", "--yes"],
+                                env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must not contain the toolbox", result.stderr)
+        self.assertFalse(any(e[:2] == ["docker", "stop"] for e in self.events()))
+
+    def test_reset_stops_capture_before_stopping_android_and_replacing_data(self):
+        session = self.root / "captures/session"
+        session.mkdir(parents=True)
+        (session / "proxy").write_text("172.17.0.1:8080")
+        current = self.root / ".runtime/capture.current"
+        current.write_text(str(session))
+        self.run_reset("--yes")
+        events = self.events()
+        clear_proxy = next(i for i, e in enumerate(events) if "http_proxy" in e)
+        stop = next(i for i, e in enumerate(events) if e[:2] == ["docker", "stop"])
+        swap = next(i for i, e in enumerate(events) if e[0] == "mv")
+        self.assertLess(clear_proxy, stop)
+        self.assertLess(stop, swap)
+        self.assertFalse(current.exists())
+        self.assertTrue(session.exists())
+
+    def test_reset_lock_contention_does_not_touch_data(self):
+        with (self.root / ".runtime/lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.run_reset("--yes", ok=False)
+        self.assertEqual(self.events(), [])
+        self.assertEqual((self.data / "app").read_text(), "clean")
 
     def test_offline_snapshots_do_not_start_a_container(self):
         for status in ("absent", "exited", "created"):

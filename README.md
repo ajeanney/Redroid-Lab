@@ -178,6 +178,7 @@ and restores the host's previous BlueZ and adapter power state.
 | `./redroid.sh launch <package>` | Start an installed app headlessly (then watch it with `screen`) |
 | `./redroid.sh appdata pull\|diff <package>` | Copy private user-0 files or compare the last two completed pulls |
 | `./redroid.sh snapshot save\|restore <name>` | Save or replace Android data while the container is stopped; restart it if it was running |
+| `./redroid.sh reset --yes` | Factory-reset Android user data; restart it only if it was running |
 | `./redroid.sh capture start [--no-mitm\|--transparent] [--app <pkg>] [--logcat] [--record] [--btsnoop]` | Record all container traffic to `captures/<UTC timestamp>-<random suffix>/` |
 | `./redroid.sh capture stop` / `status` | End the session and write the artifacts / show the active session |
 | `./redroid.sh frida start` / `stop` | Push and run `frida-server` as root in the guest, forwarded to the host loopback / stop it |
@@ -382,6 +383,24 @@ directories are created private to the calling user.
 
 Existing local configurations inherit the shipped snapshot directory default
 unless they set `SNAPSHOT_DIR` themselves.
+
+## Factory reset
+
+```sh
+./redroid.sh snapshot save before-reset   # optional backup
+./redroid.sh reset --yes
+```
+
+`reset --yes` **erases all Android user data** in `REDROID_DATA_DIR`: installed
+apps, accounts, settings, Bluetooth bonds and shared storage. Android initializes
+fresh data for the configured image on its next boot. The image, toolbox config,
+and host snapshots/exports stored outside that data directory are preserved.
+
+The command ends active capture and Frida sessions, stops Android before replacing
+its data, and restarts it only if it was running. No confirmation flag means no
+reset. If restarting fails, previous data is kept under
+`.redroid-restore.*/previous`; run `./redroid.sh stop` to recover host ownership
+before investigating. A successful reset removes that temporary recovery copy.
 
 ## Packet capture
 

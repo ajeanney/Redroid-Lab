@@ -16,7 +16,7 @@ Allowed without asking:
 - `./redroid.sh status` (read-only)
 
 Ask first:
-- `./redroid.sh setup | start | stop | screen | logs | install | pull | launch | snapshot | capture | frida | appdata` (installs packages, builds images, takes over Bluetooth, writes `.runtime/`, `apps/`, `appdata/`, `snapshots/`, `captures/` and `.cache/frida/`; snapshot restore replaces Android data)
+- `./redroid.sh setup | start | stop | screen | logs | install | pull | launch | snapshot | reset | capture | frida | appdata` (installs packages, builds images, takes over Bluetooth, writes `.runtime/`, `apps/`, `appdata/`, `snapshots/`, `captures/` and `.cache/frida/`; snapshot restore replaces Android data; `reset --yes` erases all Android user data)
 - Any `docker`, `systemctl`, `bluetoothctl`, `btmgmt`, `nft`, `modprobe` or `sudo` command
 - `git commit`, `git push`, deleting files, adding dependencies or changing pinned digests/checksums
 
@@ -30,7 +30,7 @@ Never:
 
 | Path | Purpose |
 | --- | --- |
-| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `pull`, `launch`, `snapshot`, `capture`, `frida`, `appdata`. Defines paths, sources `lib/`, dispatches. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
+| `redroid.sh` | Single entry point: `setup`, `start`, `stop`, `screen`, `status`, `logs`, `install`, `pull`, `launch`, `snapshot`, `reset`, `capture`, `frida`, `appdata`. Defines paths, sources `lib/`, dispatches. Lifecycle under a lock, state in `.runtime/state.env`, active capture in `.runtime/capture.current` |
 | `lib/` | Sourced by `redroid.sh`, one area per file: `common.sh` (messages, config, lock, Docker/ADB wrappers), `setup.sh`, `bluetooth.sh` (host takeover/restore), `lifecycle.sh` (`start`/`stop`/`screen`/`status`/`logs`, host state), `capture.sh`, `apps.sh` (`install`/`pull`/`launch`, optional `--report` via `manifest_report.py`), `appdata.sh` (private live copies/diffs via `appdata.py`), `snapshot.sh`, `frida.sh`. Keep each under ~600 lines |
 | `.shellcheckrc` | Lets `shellcheck redroid.sh` follow the sourced `lib/` files |
 | `redroid.env` | Defaults (image, optional identity properties, ports, adapter, `BT_ENABLE`, APK/snapshot/capture directories, capture/Frida ports, transparent table/group, display, timeouts). Override via `REDROID_CONFIG=./redroid.local.env` |
@@ -38,6 +38,7 @@ Never:
 | `appdata/` | Gitignored private user-0 app data pulls; `appdata pull <package>` copies live data, `appdata diff <package>` compares the last two completed copies |
 | `snapshots/` | Gitignored named copies of Android data (`<name>/data/`); `snapshot save\|restore <name>` stops the existing container and restarts it only if it was running |
 | `.redroid-restore.*/` | Private restore staging next to the data directory; previous data retained on restart failure |
+| `lib/reset.sh` | `reset --yes` wipes Android user data through the shared staging and recovery helpers in `lib/snapshot.sh`; restart only if previously running, retain previous data on restart failure |
 | `captures/` | Gitignored capture sessions (`full.pcap`, `flows.mitm`, `sslkeylog.txt`, `full-decrypted.pcapng`); optional timeline flags write UID logcat, a scrcpy recording, HCI snoop and clock anchors; proxied sessions also record `netns.id`, `redirect.table`, `module.loaded` and `proxy.before` for cleanup |
 | `frida/` | `unpin.js` is the Java TLS bypass; `frida script <name> <package> [args]` selects crypto, conceal, native-unpin or flutter-unpin hooks |
 | `.cache/frida/` | Gitignored: downloaded, checksummed `frida-server` binaries |
@@ -50,7 +51,7 @@ Never:
 | `tests/test_capture.py` | Isolated explicit/raw/transparent capture lifecycle and rollback tests with fake host tools |
 | `tests/test_screen.py` | Screen capability detection and AAC selection with fake ADB and scrcpy |
 | `tests/test_pull.py` | Isolated extraction, optional analysis and failure tests with fake ADB, apktool and jadx commands |
-| `tests/test_snapshot.py` | Isolated snapshot round-trip and failure tests with fake Docker, sudo and ADB commands |
+| `tests/test_snapshot.py` | Isolated snapshot/reset round-trip, data-safety and failure tests with fake Docker, sudo and ADB commands |
 
 The `btlinux` name in HAL files, binaries and `redroid.sh` messages is AOSP's component name (`android.hardware.bluetooth@1.1-service.btlinux`), not the old project name. Do not rename it.
 
@@ -71,7 +72,7 @@ python3 tests/test_frida.py      # Frida script dispatch and package validation
 python3 tests/test_manifest_report.py # decoded manifest and network security reports
 python3 tests/test_appdata.py    # safe archive extraction and app-data diffs with fake guest commands
 python3 tests/test_pull.py       # temporary files and fake ADB/analysis tools
-python3 tests/test_snapshot.py   # temporary data and fake commands; no hardware or sudo
+python3 tests/test_snapshot.py   # snapshot/reset with temporary data and fake commands; no hardware or sudo
 ```
 
 Both `bash -n` and `shellcheck` are clean today (rc 0); keep them clean.

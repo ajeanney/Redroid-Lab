@@ -28,12 +28,14 @@ source "$SCRIPT_DIR/lib/apps.sh"
 source "$SCRIPT_DIR/lib/appdata.sh"
 # shellcheck source=lib/snapshot.sh
 source "$SCRIPT_DIR/lib/snapshot.sh"
+# shellcheck source=lib/reset.sh
+source "$SCRIPT_DIR/lib/reset.sh"
 # shellcheck source=lib/frida.sh
 source "$SCRIPT_DIR/lib/frida.sh"
 
 usage() {
     cat <<'EOF'
-Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|pull|launch|snapshot|capture|frida|appdata}
+Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|pull|launch|snapshot|reset|capture|frida|appdata}
 
   setup    Install missing Arch/Debian/Ubuntu tools and build the image
   start    Boot redroid; give hci0 to Android unless --no-bt (or BT_ENABLE=0)
@@ -46,6 +48,7 @@ Usage: ./redroid.sh {setup|start|stop|screen|status|logs|install|pull|launch|sna
   appdata  appdata pull|diff <package>: copy private data or compare the last two pulls
   launch   Start an installed app by package name
   snapshot snapshot save|restore <name>: copy stopped Android data, then restart
+  reset    reset --yes: erase all Android data for a factory reset
   capture  capture start [--no-mitm|--transparent] [--app <pkg>] [--logcat] [--record] [--btsnoop] | stop | status: pcap + decoded HTTPS
   frida    frida start | stop | unpin <package> | script <name> <pkg> [args] | exec <tool> [args]: root hooking
 EOF
@@ -64,6 +67,7 @@ case ${1:-} in
     appdata) shift; cmd_appdata "$@" ;;
     launch) shift; cmd_launch "$@" ;;
     snapshot) shift; cmd_snapshot "$@" ;;
+    reset) shift; cmd_reset "$@" ;;
     capture) shift; cmd_capture "$@" ;;
     frida) shift; cmd_frida "$@" ;;
     *) usage; exit 2 ;;

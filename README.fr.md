@@ -183,6 +183,7 @@ l'alimentation de l'adaptateur.
 | `./redroid.sh launch <paquet>` | Lance une application installée sans interface (à suivre avec `screen`) |
 | `./redroid.sh appdata pull\|diff <paquet>` | Copier les fichiers privés de l’utilisateur 0 ou comparer les deux dernières copies |
 | `./redroid.sh snapshot save\|restore <nom>` | Sauvegarde ou remplace les données Android conteneur arrêté ; le redémarre s'il tournait auparavant |
+| `./redroid.sh reset --yes` | Réinitialise les données utilisateur Android ; le redémarre seulement s'il tournait auparavant |
 | `./redroid.sh capture start [--no-mitm\|--transparent] [--app <pkg>] [--logcat] [--record] [--btsnoop]` | Enregistre tout le trafic du conteneur dans `captures/<horodatage UTC>-<suffixe aléatoire>/` |
 | `./redroid.sh capture stop` / `status` | Termine la session et écrit les artefacts / affiche la session active |
 | `./redroid.sh frida start` / `stop` | Pousse et lance `frida-server` en root dans l'invité, redirigé vers la loopback de l'hôte / l'arrête |
@@ -400,6 +401,27 @@ qu'à l'utilisateur appelant.
 
 Les configurations locales existantes héritent du dossier d'instantanés par
 défaut fourni, sauf si elles définissent elles-mêmes `SNAPSHOT_DIR`.
+
+## Réinitialisation d'usine
+
+```sh
+./redroid.sh snapshot save avant-reset   # sauvegarde facultative
+./redroid.sh reset --yes
+```
+
+`reset --yes` **efface toutes les données utilisateur Android** dans
+`REDROID_DATA_DIR` : applications installées, comptes, réglages, appairages
+Bluetooth et stockage partagé. Au prochain démarrage, Android initialise des
+données vierges pour l'image configurée. L'image, la configuration de la boîte
+à outils et les instantanés/exports hôte situés hors de ce dossier sont conservés.
+
+La commande termine les sessions de capture et Frida, arrête Android avant de
+remplacer ses données et le redémarre seulement s'il tournait auparavant.
+Sans le drapeau de confirmation, aucune réinitialisation n'est effectuée. Si le
+redémarrage échoue, les anciennes données restent dans
+`.redroid-restore.*/previous` ; lancez `./redroid.sh stop` pour rendre les
+ressources à l'hôte avant d'enquêter. Une réinitialisation réussie supprime
+cette copie temporaire de récupération.
 
 ## Capture de paquets
 
